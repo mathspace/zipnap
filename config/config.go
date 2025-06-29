@@ -28,13 +28,13 @@ type Service struct {
 
 // Schedule represents a time period during which the backend should be spun up.
 type Schedule struct {
-	Start    time.Time      `json:"start"`
-	End      *time.Time     `json:"end,omitempty"`
-	Duration *time.Duration `json:"duration,omitempty"`
+	Name     string        `json:"name"`
+	Start    string        `json:"start"`
+	Duration time.Duration `json:"duration"`
 }
 
-// Backend represents a backend machine that runs services to be proxied.
-type Backend struct {
+// Instances represents a backend machine that runs services to be proxied.
+type Instances struct {
 	Name      string     `json:"name"`
 	Type      string     `json:"type"`
 	EC2       *EC2       `json:"ec2,omitempty"`
@@ -44,5 +44,5 @@ type Backend struct {
 
 // Config represents the configuration for the application.
 type Config struct {
-	Backends []Backend `json:"backends"`
+	Instances []Instances `json:"backends"`
 }
