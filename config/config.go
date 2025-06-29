@@ -18,12 +18,18 @@ type HTTP struct {
 	Port int `json:"port"`
 }
 
+type ServiceType string
+
+// ServiceType represents the type of service.
+const (
+	ServiceTypeHTTP ServiceType = "http"
+)
+
 // Service represents a service that is to be proxied.
 type Service struct {
-	Name    string        `json:"name"`
-	Timeout time.Duration `json:"timeout"`
-	Type    string        `json:"type"`
-	HTTP    *HTTP         `json:"http,omitempty"`
+	Name string      `json:"name"`
+	Type ServiceType `json:"type"`
+	HTTP *HTTP       `json:"http,omitempty"`
 }
 
 // Schedule represents a time period during which the backend should be spun up.
@@ -33,13 +39,21 @@ type Schedule struct {
 	Duration time.Duration `json:"duration"`
 }
 
+type InstanceType string
+
+// InstanceType represents the type of instance.
+const (
+	InstanceTypeEC2 InstanceType = "ec2"
+)
+
 // Instances represents a backend machine that runs services to be proxied.
 type Instances struct {
-	Name      string     `json:"name"`
-	Type      string     `json:"type"`
-	EC2       *EC2       `json:"ec2,omitempty"`
-	Services  []Service  `json:"services,omitempty"`
-	Schedules []Schedule `json:"schedules,omitempty"`
+	Name      string        `json:"name"`
+	Type      InstanceType  `json:"type"`
+	EC2       *EC2          `json:"ec2,omitempty"`
+	Timeout   time.Duration `json:"timeout"`
+	Services  []Service     `json:"services,omitempty"`
+	Schedules []Schedule    `json:"schedules,omitempty"`
 }
 
 // Config represents the configuration for the application.
