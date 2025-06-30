@@ -10,8 +10,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/kaptinlin/jsonschema"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"sigs.k8s.io/yaml"
+	gotojsonschema "github.com/invopop/jsonschema"
 )
 
 //go:embed schema.json
@@ -20,11 +21,6 @@ var schemaBytes []byte
 var schema *jsonschema.Schema
 
 func init() {
-	var err error
-	schema, err = jsonschema.NewCompiler().Compile(schemaBytes)
-	if err != nil {
-		panic(fmt.Sprintf("failed to compile schema: %v", err))
-	}
 }
 
 // EC2 represents the configuration for an EC2 instance.
