@@ -12,11 +12,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"sigs.k8s.io/yaml"
-	gotojsonschema "github.com/invopop/jsonschema"
 )
-
-//go:embed schema.json
-var schemaBytes []byte
 
 var schema *jsonschema.Schema
 
@@ -25,17 +21,17 @@ func init() {
 
 // EC2 represents the configuration for an EC2 instance.
 type EC2 struct {
-	InstanceID string `json:"instance_id"`
+	InstanceID string `json:"instance_id" jsonschema:"required,title=Instance ID,description=The EC2 instance identifier"`
 	// Shutdown indicates whether the instance should be shut down or
 	// hibernated.
-	Shutdown bool `json:"hibernate"`
+	Shutdown bool `json:"hibernate" jsonschema:"title=Hibernate,description=Whether the instance should be hibernated instead of shut down"`
 }
 
 // HTTP represents the configuration for an HTTP service. The service is assumed
 // to be active when request sent to path / on given port returns a 2xx-3xx
 // status code.
 type HTTP struct {
-	Port int `json:"port"`
+	Port int `json:"port" jsonschema:"required,title=Port,description=The port number for the HTTP service,minimum=1,maximum=65535"`
 }
 
 type ServiceType string
@@ -57,16 +53,16 @@ func (st *ServiceType) UnmarshalJSON(data []byte) error {
 
 // Service represents a service that is to be proxied.
 type Service struct {
-	Name string      `json:"name"`
-	Type ServiceType `json:"type"`
-	HTTP *HTTP       `json:"http,omitempty"`
+	Name string      `json:"name" jsonschema:"required,title=Service Name,description=The name of the service"`
+	Type ServiceType `json:"type" jsonschema:"required,title=Service Type,description=The type of service to proxy"`
+	HTTP *HTTP       `json:"http,omitempty" jsonschema:"title=HTTP Configuration,description=HTTP service configuration (required when type is http)"`
 }
 
 // Schedule represents a time period during which the instance should be spun up.
 type Schedule struct {
-	Name     string   `json:"name"`
-	Start    string   `json:"start"`
-	Duration Duration `json:"duration"`
+	Name     string   `json:"name" jsonschema:"required,title=Schedule Name,description=The name of the schedule"`
+	Start    string   `json:"start" jsonschema:"required,title=Start Time,description=The start time in cron format"`
+	Duration Duration `json:"duration" jsonschema:"required,title=Duration,description=How long the instance should remain active"`
 }
 
 // Duration wraps time.Duration to provide custom JSON marshalling
@@ -112,17 +108,17 @@ func (it *InstanceType) UnmarshalJSON(data []byte) error {
 
 // Instance represents a machine that runs services to be proxied.
 type Instance struct {
-	Name      string       `json:"name"`
-	Type      InstanceType `json:"type"`
-	EC2       *EC2         `json:"ec2,omitempty"`
-	Timeout   Duration     `json:"timeout"`
-	Services  []Service    `json:"services,omitempty"`
-	Schedules []Schedule   `json:"schedules,omitempty"`
+	Name      string       `json:"name" jsonschema:"required,title=Instance Name,description=The name of the instance"`
+	Type      InstanceType `json:"type" jsonschema:"required,title=Instance Type,description=The type of instance"`
+	EC2       *EC2         `json:"ec2,omitempty" jsonschema:"title=EC2 Configuration,description=EC2 instance configuration (required when type is ec2)"`
+	Timeout   Duration     `json:"timeout" jsonschema:"required,title=Timeout,description=How long to wait for the instance to become ready"`
+	Services  []Service    `json:"services,omitempty" jsonschema:"title=Services,description=List of services running on this instance"`
+	Schedules []Schedule   `json:"schedules,omitempty" jsonschema:"title=Schedules,description=List of schedules for automatic instance management"`
 }
 
 // Config represents the configuration for the application.
 type Config struct {
-	Instances []Instance `json:"instances"`
+	Instances []Instance `json:"instances" jsonschema:"required,title=Instances,description=List of instances to manage,minItems=1"`
 }
 
 // Load reads the configuration from the provided io.Reader, validates it
