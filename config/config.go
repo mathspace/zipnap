@@ -177,9 +177,9 @@ func Load(r io.Reader) (*Config, error) {
 
 	if val := schemaValidator.ValidateJSON(jb); !val.IsValid() {
 		for name, err := range val.Errors {
-			log.Printf("config error %s: %s", name, err.Error())
+			log.Printf("config val error: %s: %s", name, err)
 		}
-		return nil, errors.New("config validation failed")
+		return nil, errors.New("config is invalid")
 	}
 
 	// Decode JSON into Config struct
