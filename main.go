@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"strings"
 
 	"github.com/mathspace/zipnap/config"
 )
@@ -13,7 +14,14 @@ var (
 
 func run() error {
 	// Load the configuration file
-	config.Load(nil)
+	cfg := `
+instances:
+  - name: example-instance
+    type: ec2
+    ec2:
+      instance_id: i-1234567890abcdef0
+`
+	config.Load(strings.NewReader(cfg))
 	return nil
 }
 

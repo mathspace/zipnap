@@ -25,6 +25,7 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("failed to generate JSON schema: %v", err))
 	}
+	log.Printf("JSON schema: %s", string(schema))
 	schemaValidator, err = jsonschemavalidator.NewCompiler().Compile(schema)
 	if err != nil {
 		panic(fmt.Sprintf("failed to compile JSON schema: %v", err))
@@ -86,7 +87,7 @@ func (s Service) JSONSchemaExtend(schema *jsonschema.Schema) {
 type Schedule struct {
 	Name     string   `json:"name" jsonschema:"required,title=Schedule Name,description=The name of the schedule"`
 	Start    string   `json:"start" jsonschema:"required,title=Start Time,description=The start time in cron format"`
-	Duration Duration `json:"duration" jsonschema:"required,title=Duration,description=How long the instance should remain active"`
+	Duration Duration `json:"duration" jsonschema:"required,title=Duration,description=How long the instance should remain active,type=string"`
 }
 
 // Duration wraps time.Duration to provide custom JSON marshalling
@@ -135,7 +136,7 @@ type Instance struct {
 	Name      string       `json:"name" jsonschema:"required,title=Instance Name,description=The name of the instance"`
 	Type      InstanceType `json:"type" jsonschema:"required,title=Instance Type,description=The type of instance,enum=ec2"`
 	EC2       *EC2         `json:"ec2,omitempty" jsonschema:"title=EC2 Configuration,description=EC2 instance configuration (required when type is ec2)"`
-	Timeout   Duration     `json:"timeout" jsonschema:"required,title=Timeout,description=How long to wait for the instance to become ready"`
+	Timeout   Duration     `json:"timeout" jsonschema:"required,title=Timeout,description=How long to wait for the instance to become ready,type=string"`
 	Services  []Service    `json:"services,omitempty" jsonschema:"title=Services,description=List of services running on this instance"`
 	Schedules []Schedule   `json:"schedules,omitempty" jsonschema:"title=Schedules,description=List of schedules for automatic instance management"`
 }
@@ -150,6 +151,13 @@ func (s Instance) JSONSchemaExtend(schema *jsonschema.Schema) {
 			Properties: props1,
 		},
 	}
+}
+
+func (s Instance) JSONSchemaProperty(n string) any {
+	if n == "timeout" {
+		return ""
+	}
+	return nil
 }
 
 // Config represents the configuration for the application.
