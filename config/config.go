@@ -25,7 +25,7 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("failed to compile schema: %v", err))
 	}
-
+}
 
 // EC2 represents the configuration for an EC2 instance.
 type EC2 struct {
@@ -144,7 +144,7 @@ func Load(r io.Reader) (*Config, error) {
 	valResults := schema.ValidateJSON(jb)
 	if !valResults.IsValid() {
 		var buf bytes.Buffer
-		for _, err := range valResults.Errors() {
+		for _, err := range valResults.Errors {
 			buf.WriteString(fmt.Sprintf("Validation error: %s\n", err))
 		}
 		return nil, fmt.Errorf("config validation failed:\n%s", buf.String())
