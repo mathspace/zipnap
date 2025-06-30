@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"log"
+
+	"github.com/mathspace/zipnap/config"
 )
 
 var (
@@ -10,7 +12,8 @@ var (
 )
 
 func run() error {
-
+	// Load the configuration file
+	config.Load(nil)
 	return nil
 }
 
