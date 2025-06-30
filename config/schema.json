@@ -1,0 +1,197 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Zipnap Configuration",
+  "description": "Configuration schema for the Zipnap application",
+  "type": "object",
+  "properties": {
+    "instances": {
+      "type": "array",
+      "description": "List of instances to be managed",
+      "items": {
+        "$ref": "#/definitions/Instance"
+      }
+    }
+  },
+  "required": ["instances"],
+  "additionalProperties": false,
+  "definitions": {
+    "Instance": {
+      "type": "object",
+      "description": "Represents a machine that runs services to be proxied",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the instance",
+          "minLength": 1
+        },
+        "type": {
+          "$ref": "#/definitions/InstanceType"
+        },
+        "ec2": {
+          "$ref": "#/definitions/EC2",
+          "description": "EC2 configuration (required when type is 'ec2')"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Timeout duration in Go duration format (e.g., '5m', '30s', '1h30m')",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(s|m|h))+$"
+        },
+        "services": {
+          "type": "array",
+          "description": "List of services running on this instance",
+          "items": {
+            "$ref": "#/definitions/Service"
+          }
+        },
+        "schedules": {
+          "type": "array",
+          "description": "List of schedules for when this instance should be active",
+          "items": {
+            "$ref": "#/definitions/Schedule"
+          }
+        }
+      },
+      "required": ["name", "type", "timeout"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ec2"
+              }
+            }
+          },
+          "then": {
+            "required": ["ec2"],
+            "properties": {
+              "ec2": {
+                "$ref": "#/definitions/EC2"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "InstanceType": {
+      "type": "string",
+      "description": "Type of instance",
+      "enum": ["ec2"]
+    },
+    "EC2": {
+      "type": "object",
+      "description": "EC2 instance configuration",
+      "properties": {
+        "instance_id": {
+          "type": "string",
+          "description": "AWS EC2 instance ID",
+          "pattern": "^i-[0-9a-f]{8,17}$"
+        },
+        "hibernate": {
+          "type": "boolean",
+          "description": "Whether the instance should be hibernated (true) or shut down (false)"
+        }
+      },
+      "required": ["instance_id", "hibernate"],
+      "additionalProperties": false
+    },
+    "Service": {
+      "type": "object",
+      "description": "Service configuration for proxying",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the service",
+          "minLength": 1
+        },
+        "type": {
+          "$ref": "#/definitions/ServiceType"
+        },
+        "http": {
+          "$ref": "#/definitions/HTTP",
+          "description": "HTTP service configuration (required when type is 'http')"
+        }
+      },
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "http"
+              }
+            }
+          },
+          "then": {
+            "required": ["http"],
+            "properties": {
+              "http": {
+                "$ref": "#/definitions/HTTP"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ServiceType": {
+      "type": "string",
+      "description": "Type of service",
+      "enum": ["http"]
+    },
+    "HTTP": {
+      "type": "object",
+      "description": "HTTP service configuration",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "description": "Port number for the HTTP service",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      },
+      "required": ["port"],
+      "additionalProperties": false
+    },
+    "Schedule": {
+      "type": "object",
+      "description": "Time period during which the instance should be spun up",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the schedule",
+          "minLength": 1
+        },
+        "start": {
+          "type": "string",
+          "description": "Cron expression for when to start (robfig/cron format)",
+          "oneOf": [
+            {
+              "pattern": "^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$",
+              "description": "Predefined schedule descriptors"
+            },
+            {
+              "pattern": "^@every\\s+([0-9]+(\\.[0-9]+)?(m|h))+$",
+              "description": "Interval schedule (@every <duration>)"
+            },
+            {
+              "pattern": "^(CRON_TZ=[A-Za-z_]+/[A-Za-z_]+\\s+)?([0-9*,/-]+\\s+){4}[0-9*,/-]+$",
+              "description": "Standard 5-field cron expression (minute hour day month dow) with optional timezone"
+            },
+            {
+              "pattern": "^(CRON_TZ=[A-Za-z_]+/[A-Za-z_]+\\s+)?([0-9*,/-]+\\s+){5}[0-9*,/-]+$",
+              "description": "6-field cron expression with seconds (second minute hour day month dow) with optional timezone"
+            }
+          ]
+        },
+        "duration": {
+          "type": "string",
+          "description": "Duration to keep the instance active in Go duration format",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(m|h))+$"
+        }
+      },
+      "required": ["name", "start", "duration"],
+      "additionalProperties": false
+    }
+  }
+}
