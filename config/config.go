@@ -4,6 +4,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,8 +12,24 @@ import (
 	"time"
 
 	"github.com/invopop/jsonschema"
+	jsonschemavalidator "github.com/kaptinlin/jsonschema"
 	"sigs.k8s.io/yaml"
 )
+
+var schemaValidator *jsonschemavalidator.Schema
+
+func init() {
+	var err error
+	s := jsonschema.Reflect(&Config{})
+	schema, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		panic(fmt.Sprintf("failed to generate JSON schema: %v", err))
+	}
+	schemaValidator, err = jsonschemavalidator.NewCompiler().Compile(schema)
+	if err != nil {
+		panic(fmt.Sprintf("failed to compile JSON schema: %v", err))
+	}
+}
 
 // EC2 represents the configuration for an EC2 instance.
 type EC2 struct {
@@ -144,12 +161,6 @@ type Config struct {
 // against the schema, and returns a Config object.
 func Load(r io.Reader) (*Config, error) {
 
-	// Generate schema
-	schema := jsonschema.Reflect(&Config{})
-	schemaStr, err := json.MarshalIndent(schema, "", "  ")
-	log.Print(string(schemaStr))
-	panic("FUCKERR")
-
 	var config Config
 	yb, err := io.ReadAll(r)
 	if err != nil {
@@ -160,6 +171,15 @@ func Load(r io.Reader) (*Config, error) {
 	jb, err := yaml.YAMLToJSONStrict(yb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert YAML to JSON: %w", err)
+	}
+
+	// Validate JSON against the schema
+
+	if val := schemaValidator.ValidateJSON(jb); !val.IsValid() {
+		for name, err := range val.Errors {
+			log.Printf("config error %s: %s", name, err.Error())
+		}
+		return nil, errors.New("config validation failed")
 	}
 
 	// Decode JSON into Config struct
