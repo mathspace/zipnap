@@ -2,10 +2,30 @@
 package config
 
 import (
+	"bytes"
+	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"time"
+
+	"github.com/kaptinlin/jsonschema"
+	"sigs.k8s.io/yaml"
 )
+
+//go:embed schema.json
+var schemaBytes []byte
+
+var schema *jsonschema.Schema
+
+func init() {
+	var err error
+	schema, err = jsonschema.NewCompiler().Compile(schemaBytes)
+	if err != nil {
+		panic(fmt.Sprintf("failed to compile schema: %v", err))
+	}
+
 
 // EC2 represents the configuration for an EC2 instance.
 type EC2 struct {
@@ -107,4 +127,43 @@ type Instance struct {
 // Config represents the configuration for the application.
 type Config struct {
 	Instances []Instance `json:"instances"`
+}
+
+// Load reads the configuration from the provided io.Reader, validates it
+// against the schema, and returns a Config object.
+func Load(r io.Reader) (*Config, error) {
+	var config Config
+	yb, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config: %w", err)
+	}
+	jb, err := yaml.YAMLToJSONStrict(yb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert YAML to JSON: %w", err)
+	}
+	valResults := schema.ValidateJSON(jb)
+	if !valResults.IsValid() {
+		var buf bytes.Buffer
+		for _, err := range valResults.Errors() {
+			buf.WriteString(fmt.Sprintf("Validation error: %s\n", err))
+		}
+		return nil, fmt.Errorf("config validation failed:\n%s", buf.String())
+	}
+	decoder := json.NewDecoder(bytes.NewReader(jb))
+	if err := decoder.Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode config: %w", err)
+	}
+	return &config, nil
+}
+
+// LoadFile reads the configuration from a file at the specified path,
+// validates it against the schema, and returns a Config object.
+func LoadFile(path string) (*Config, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open config file: %w", err)
+	}
+	defer file.Close()
+
+	return Load(file)
 }
