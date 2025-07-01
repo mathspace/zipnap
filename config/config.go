@@ -2,49 +2,28 @@
 package config
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"time"
 
-	"github.com/invopop/jsonschema"
-	jsonschemavalidator "github.com/kaptinlin/jsonschema"
-	"sigs.k8s.io/yaml"
+	"github.com/robfig/cron/v3"
+	"gopkg.in/yaml.v3"
 )
-
-var schemaValidator *jsonschemavalidator.Schema
-
-func init() {
-	var err error
-	s := jsonschema.Reflect(&Config{})
-	schema, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		panic(fmt.Sprintf("failed to generate JSON schema: %v", err))
-	}
-	log.Printf("JSON schema: %s", string(schema))
-	schemaValidator, err = jsonschemavalidator.NewCompiler().Compile(schema)
-	if err != nil {
-		panic(fmt.Sprintf("failed to compile JSON schema: %v", err))
-	}
-}
 
 // EC2 represents the configuration for an EC2 instance.
 type EC2 struct {
-	InstanceID string `json:"instance_id" jsonschema:"required,title=Instance ID,description=The EC2 instance identifier"`
+	InstanceID string `yaml:"instance_id"`
 	// Shutdown indicates whether the instance should be shut down or
 	// hibernated.
-	Shutdown bool `json:"hibernate" jsonschema:"title=Hibernate,description=Whether the instance should be hibernated instead of shut down"`
+	Shutdown bool `yaml:"shutdown"`
 }
 
 // HTTP represents the configuration for an HTTP service. The service is assumed
 // to be active when request sent to path / on given port returns a 2xx-3xx
 // status code.
 type HTTP struct {
-	Port int `json:"port" jsonschema:"required,title=Port,description=The port number for the HTTP service,minimum=1,maximum=65535"`
+	Port int `yaml:"port"`
 }
 
 type ServiceType string
@@ -54,10 +33,9 @@ const (
 	ServiceTypeHTTP ServiceType = "http"
 )
 
-// UnmarshalJSON implements the json.Unmarshaler interface for ServiceType
-func (st *ServiceType) UnmarshalJSON(data []byte) error {
+func (st *ServiceType) UnmarshalYAML(n *yaml.Node) error {
 	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
+	if err := n.Decode(&s); err != nil {
 		return err
 	}
 	*st = ServiceType(s)
@@ -66,28 +44,37 @@ func (st *ServiceType) UnmarshalJSON(data []byte) error {
 
 // Service represents a service that is to be proxied.
 type Service struct {
-	Name string      `json:"name" jsonschema:"required,title=Service Name,description=The name of the service"`
-	Type ServiceType `json:"type" jsonschema:"required,title=Service Type,description=The type of service to proxy,enum=http"`
-	HTTP *HTTP       `json:"http,omitempty" jsonschema:"title=HTTP Configuration,description=HTTP service configuration (required when type is http)"`
+	Name string      `yaml:"name"`
+	Type ServiceType `yaml:"type"`
+	HTTP *HTTP       `yaml:"http,omitempty"`
 }
 
-// JSONSchemaExtend implements conditional validation for Service
-func (s Service) JSONSchemaExtend(schema *jsonschema.Schema) {
-	props1 := jsonschema.NewProperties()
-	props1.Set("type", &jsonschema.Schema{Const: "http"})
-	schema.OneOf = []*jsonschema.Schema{
-		{
-			Required:   []string{"type", "http"},
-			Properties: props1,
-		},
+type CronSchedule struct {
+	cron.Schedule
+}
+
+// UnmarshalYAML implements custom unmarshalling for CronSchedule to handle
+// cron expressions.
+func (cs *CronSchedule) UnmarshalYAML(n *yaml.Node) error {
+	var expr string
+	if err := n.Decode(&expr); err != nil {
+		return fmt.Errorf("failed to decode cron expression: %w", err)
 	}
+
+	schedule, err := cron.ParseStandard(expr)
+	if err != nil {
+		return fmt.Errorf("invalid cron expression %q: %w", expr, err)
+	}
+
+	cs.Schedule = schedule
+	return nil
 }
 
 // Schedule represents a time period during which the instance should be spun up.
 type Schedule struct {
-	Name     string   `json:"name" jsonschema:"required,title=Schedule Name,description=The name of the schedule"`
-	Start    string   `json:"start" jsonschema:"required,title=Start Time,description=The start time in cron format"`
-	Duration Duration `json:"duration" jsonschema:"required,title=Duration,description=How long the instance should remain active,type=string"`
+	Name     string       `yaml:"name"`
+	Start    CronSchedule `yaml:"start"`
+	Duration Duration     `yaml:"duration"`
 }
 
 // Duration wraps time.Duration to provide custom JSON marshalling
@@ -95,15 +82,9 @@ type Duration struct {
 	time.Duration
 }
 
-// MarshalJSON implements the json.Marshaler interface
-func (d Duration) MarshalJSON() ([]byte, error) {
-	return json.Marshal(d.Duration.String())
-}
-
-// UnmarshalJSON implements the json.Unmarshaler interface
-func (d *Duration) UnmarshalJSON(data []byte) error {
+func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
+	if err := n.Decode(&s); err != nil {
 		return err
 	}
 	duration, err := time.ParseDuration(s)
@@ -121,10 +102,9 @@ const (
 	InstanceTypeEC2 InstanceType = "ec2"
 )
 
-// UnmarshalJSON implements the json.Unmarshaler interface for InstanceType
-func (it *InstanceType) UnmarshalJSON(data []byte) error {
+func (it *InstanceType) UnmarshalYAML(n *yaml.Node) error {
 	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
+	if err := n.Decode(&s); err != nil {
 		return err
 	}
 	*it = InstanceType(s)
@@ -133,36 +113,17 @@ func (it *InstanceType) UnmarshalJSON(data []byte) error {
 
 // Instance represents a machine that runs services to be proxied.
 type Instance struct {
-	Name      string       `json:"name" jsonschema:"required,title=Instance Name,description=The name of the instance"`
-	Type      InstanceType `json:"type" jsonschema:"required,title=Instance Type,description=The type of instance,enum=ec2"`
-	EC2       *EC2         `json:"ec2,omitempty" jsonschema:"title=EC2 Configuration,description=EC2 instance configuration (required when type is ec2)"`
-	Timeout   Duration     `json:"timeout" jsonschema:"required,title=Timeout,description=How long to wait for the instance to become ready,type=string"`
-	Services  []Service    `json:"services,omitempty" jsonschema:"title=Services,description=List of services running on this instance"`
-	Schedules []Schedule   `json:"schedules,omitempty" jsonschema:"title=Schedules,description=List of schedules for automatic instance management"`
-}
-
-// JSONSchemaExtend implements conditional validation for Service
-func (s Instance) JSONSchemaExtend(schema *jsonschema.Schema) {
-	props1 := jsonschema.NewProperties()
-	props1.Set("type", &jsonschema.Schema{Const: "ec2"})
-	schema.OneOf = []*jsonschema.Schema{
-		{
-			Required:   []string{"type", "ec2"},
-			Properties: props1,
-		},
-	}
-}
-
-func (s Instance) JSONSchemaProperty(n string) any {
-	if n == "timeout" {
-		return ""
-	}
-	return nil
+	Name      string       `yaml:"name"`
+	Type      InstanceType `yaml:"type"`
+	EC2       *EC2         `yaml:"ec2,omitempty"`
+	Timeout   Duration     `yaml:"timeout"`
+	Services  []Service    `yaml:"services,omitempty"`
+	Schedules []Schedule   `yaml:"schedules,omitempty"`
 }
 
 // Config represents the configuration for the application.
 type Config struct {
-	Instances []Instance `json:"instances" jsonschema:"required,title=Instances,description=List of instances to manage,minItems=1"`
+	Instances []Instance `yaml:"instances"`
 }
 
 // Load reads the configuration from the provided io.Reader, validates it
@@ -170,30 +131,60 @@ type Config struct {
 func Load(r io.Reader) (*Config, error) {
 
 	var config Config
-	yb, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
-	}
 
-	// Convert YAML to JSON
-	jb, err := yaml.YAMLToJSONStrict(yb)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert YAML to JSON: %w", err)
-	}
-
-	// Validate JSON against the schema
-
-	if val := schemaValidator.ValidateJSON(jb); !val.IsValid() {
-		for name, err := range val.Errors {
-			log.Printf("config val error: %s: %s", name, err)
-		}
-		return nil, errors.New("config is invalid")
-	}
-
-	// Decode JSON into Config struct
-	decoder := json.NewDecoder(bytes.NewReader(jb))
+	decoder := yaml.NewDecoder(r)
+	decoder.KnownFields(true)
 	if err := decoder.Decode(&config); err != nil {
-		return nil, fmt.Errorf("failed to decode config: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Validate the configuration
+
+	for _, i := range config.Instances {
+		if i.Name == "" {
+			return nil, fmt.Errorf("instance must have a name")
+		}
+		if i.Timeout.Duration <= 0 {
+			return nil, fmt.Errorf("instance %q must have a positive timeout", i.Name)
+		}
+		if i.Type != InstanceTypeEC2 {
+			return nil, fmt.Errorf("instance %q has unsupported type %q", i.Name, i.Type)
+		}
+		if i.Type == InstanceTypeEC2 && i.EC2 == nil {
+			return nil, fmt.Errorf("instance %q of type %q must have EC2 configuration", i.Name, i.Type)
+		}
+		if i.EC2 != nil {
+			if i.EC2.InstanceID == "" {
+				return nil, fmt.Errorf("instance %q of type %q must have a valid instance_id", i.Name, i.Type)
+			}
+		}
+		for _, s := range i.Services {
+			if s.Name == "" {
+				return nil, fmt.Errorf("service in instance %q must have a name", i.Name)
+			}
+			if s.Type != ServiceTypeHTTP {
+				return nil, fmt.Errorf("service %q in instance %q has unsupported type %q", s.Name, i.Name, s.Type)
+			}
+			if s.Type == ServiceTypeHTTP && s.HTTP == nil {
+				return nil, fmt.Errorf("service %q in instance %q of type %q must have HTTP configuration", s.Name, i.Name, s.Type)
+			}
+			if s.HTTP != nil {
+				if s.HTTP.Port <= 0 || s.HTTP.Port > 65535 {
+					return nil, fmt.Errorf("service %q in instance %q has invalid http port %d", s.Name, i.Name, s.HTTP.Port)
+				}
+			}
+		}
+		for _, s := range i.Schedules {
+			if s.Name == "" {
+				return nil, fmt.Errorf("schedule in instance %q must have a name", i.Name)
+			}
+			if s.Start.Schedule == nil {
+				return nil, fmt.Errorf("schedule %q in instance %q must have a start time", s.Name, i.Name)
+			}
+			if s.Duration.Duration <= 0 {
+				return nil, fmt.Errorf("schedule %q in instance %q must have a positive duration", s.Name, i.Name)
+			}
+		}
 	}
 
 	return &config, nil

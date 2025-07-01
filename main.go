@@ -14,15 +14,20 @@ var (
 
 func run() error {
 	// Load the configuration file
-	cfg := `
-instances:
-  - name: example-instance
-    type: ec2
-    ec2:
-      instance_id: i-1234567890abcdef0
+	cfg := `{
+		"instances":[
+      {
+        "name":"hi",
+        "type": "ec2",
+        "ec2": {
+        },
+        "timeout": "4m"
+      }
+    ]
+}
 `
-	config.Load(strings.NewReader(cfg))
-	return nil
+	_, err := config.Load(strings.NewReader(cfg))
+	return err
 }
 
 func main() {
