@@ -15,6 +15,15 @@ import (
 	"github.com/mathspace/zipnap/config"
 )
 
+type ec2Status string
+
+const (
+	ec2StatusReady  ec2Status = "ready"
+	ec2StatusUp     ec2Status = "up"
+	ec2StatusWaking ec2Status = "waking"
+	ec2StatusDown   ec2Status = "down"
+)
+
 var (
 	configPath string
 
@@ -26,8 +35,8 @@ var (
 	// woken up.
 	wakeupEC2Ch = make(chan struct{}, 1)
 
-	// ec2Ready is a boolean indicating whether the EC2 instance is ready.
-	ec2Ready     atomic.Bool
+	// ec2CurStatus is the current status of the EC2 instance.
+	ec2CurStatus atomic.Value
 	ec2ReadyCond = sync.NewCond(&sync.Mutex{})
 
 	ec2IPAddress atomic.Value
@@ -43,17 +52,25 @@ func run() error {
 	}
 	cfgInst := cfg.Instances[0]
 
+	ec2CurStatus.Store(ec2StatusDown)
+
+	// Handle HTTP requests.
 	httpHandler := func(w http.ResponseWriter, r *http.Request) {
 		activeRequests.Add(1)
 		defer activeRequests.Add(-1)
 
 		// Show waiting page OR block the response until EC2 is ready.
-		if !ec2Ready.Load() {
 
-			// Nudge the EC2 instance to wake up if it's not ready.
-			select {
-			case wakeupEC2Ch <- struct{}{}:
-			default:
+		status := ec2CurStatus.Load().(ec2Status)
+		if status != ec2StatusReady {
+
+			if status == ec2StatusDown {
+				// Nudge the EC2 instance to wake up if it's not ready, without
+				// blocking.
+				select {
+				case wakeupEC2Ch <- struct{}{}:
+				default:
+				}
 			}
 
 			if cfgInst.Services[0].HTTP.ShowWaitingPage {
@@ -63,7 +80,7 @@ func run() error {
 				return
 			}
 			ec2ReadyCond.L.Lock()
-			for !ec2Ready.Load() {
+			for ec2CurStatus.Load().(ec2Status) != ec2StatusReady {
 				ec2ReadyCond.Wait()
 			}
 			ec2ReadyCond.L.Unlock()
