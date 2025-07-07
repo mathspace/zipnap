@@ -22,7 +22,8 @@ instances:
       - name: "web"
         type: "http"
         http:
-          port: 8080
+          service_port: 8080
+          proxy_port: 8080
     schedules:
       - name: "daily"
         start: "0 9 * * *"
@@ -73,8 +74,11 @@ instances:
 	if service.HTTP == nil {
 		t.Fatal("Expected HTTP config to be present")
 	}
-	if service.HTTP.Port != 8080 {
-		t.Errorf("Expected HTTP port 8080, got %d", service.HTTP.Port)
+	if service.HTTP.ServicePort != 8080 {
+		t.Errorf("Expected HTTP service port 8080, got %d", service.HTTP.ServicePort)
+	}
+	if service.HTTP.ProxyPort != 8080 {
+		t.Errorf("Expected HTTP proxy port 8080, got %d", service.HTTP.ProxyPort)
 	}
 
 	if len(instance.Schedules) != 1 {
@@ -135,7 +139,8 @@ instances:
       - name: "web"
         type: "http"
         http:
-          port: 8080
+          service_port: 8080
+          proxy_port: 8080
   - name: "api-server"
     type: "ec2"
     timeout: "45s"
@@ -146,11 +151,13 @@ instances:
       - name: "api"
         type: "http"
         http:
-          port: 3000
+          service_port: 3000
+          proxy_port: 3000
       - name: "metrics"
         type: "http"
         http:
-          port: 9090
+          service_port: 9090
+          proxy_port: 9090
 `
 
 	config, err := Load(strings.NewReader(configYAML))
@@ -310,7 +317,8 @@ instances:
     services:
       - type: "http"
         http:
-          port: 8080
+          service_port: 8080
+          proxy_port: 8080
 `,
 			expectedErr: "service in instance \"web-server\" must have a name",
 		},
@@ -327,7 +335,8 @@ instances:
       - name: ""
         type: "http"
         http:
-          port: 8080
+          service_port: 8080
+          proxy_port: 8080
 `,
 			expectedErr: "service in instance \"web-server\" must have a name",
 		},
@@ -362,7 +371,7 @@ instances:
 			expectedErr: "must have HTTP configuration",
 		},
 		{
-			name: "invalid HTTP port - zero",
+			name: "invalid HTTP service port - zero",
 			configYAML: `
 instances:
   - name: "web-server"
@@ -374,12 +383,13 @@ instances:
       - name: "web"
         type: "http"
         http:
-          port: 0
+          service_port: 0
+          proxy_port: 8080
 `,
-			expectedErr: "has invalid http port",
+			expectedErr: "has invalid service http port",
 		},
 		{
-			name: "invalid HTTP port - negative",
+			name: "invalid HTTP service port - negative",
 			configYAML: `
 instances:
   - name: "web-server"
@@ -391,12 +401,13 @@ instances:
       - name: "web"
         type: "http"
         http:
-          port: -1
+          service_port: -1
+          proxy_port: 8080
 `,
-			expectedErr: "has invalid http port",
+			expectedErr: "has invalid service http port",
 		},
 		{
-			name: "invalid HTTP port - too high",
+			name: "invalid HTTP service port - too high",
 			configYAML: `
 instances:
   - name: "web-server"
@@ -408,9 +419,64 @@ instances:
       - name: "web"
         type: "http"
         http:
-          port: 65536
+          service_port: 65536
+          proxy_port: 8080
 `,
-			expectedErr: "has invalid http port",
+			expectedErr: "has invalid service http port",
+		},
+		{
+			name: "invalid HTTP proxy port - zero",
+			configYAML: `
+instances:
+  - name: "web-server"
+    type: "ec2"
+    timeout: "30s"
+    ec2:
+      instance_id: "i-1234567890abcdef0"
+    services:
+      - name: "web"
+        type: "http"
+        http:
+          service_port: 8080
+          proxy_port: 0
+`,
+			expectedErr: "has invalid proxy http port",
+		},
+		{
+			name: "invalid HTTP proxy port - negative",
+			configYAML: `
+instances:
+  - name: "web-server"
+    type: "ec2"
+    timeout: "30s"
+    ec2:
+      instance_id: "i-1234567890abcdef0"
+    services:
+      - name: "web"
+        type: "http"
+        http:
+          service_port: 8080
+          proxy_port: -1
+`,
+			expectedErr: "has invalid proxy http port",
+		},
+		{
+			name: "invalid HTTP proxy port - too high",
+			configYAML: `
+instances:
+  - name: "web-server"
+    type: "ec2"
+    timeout: "30s"
+    ec2:
+      instance_id: "i-1234567890abcdef0"
+    services:
+      - name: "web"
+        type: "http"
+        http:
+          service_port: 8080
+          proxy_port: 65536
+`,
+			expectedErr: "has invalid proxy http port",
 		},
 		{
 			name: "missing schedule name",
@@ -711,7 +777,8 @@ instances:
       - name: "web"
         type: "http"
         http:
-          port: 8080
+          service_port: 8080
+          proxy_port: 8080
 `
 
 	config, err := Load(strings.NewReader(configYAML))
@@ -866,8 +933,9 @@ instances:
       - name: "web"
         type: "http"
         http:
-          port: %d
-`, tt.port)
+          service_port: %d
+          proxy_port: %d
+`, tt.port, tt.port)
 
 			_, err := Load(strings.NewReader(configYAML))
 			if tt.expectError && err == nil {
@@ -943,15 +1011,18 @@ instances:
       - name: "frontend"
         type: "http"
         http:
-          port: 3000
+          service_port: 3000
+          proxy_port: 3000
       - name: "backend"
         type: "http"
         http:
-          port: 8080
+          service_port: 8080
+          proxy_port: 8080
       - name: "metrics"
         type: "http"
         http:
-          port: 9090
+          service_port: 9090
+          proxy_port: 9090
     schedules:
       - name: "business-hours"
         start: "0 8 * * 1-5"
@@ -969,7 +1040,8 @@ instances:
       - name: "postgres"
         type: "http"
         http:
-          port: 5432
+          service_port: 5432
+          proxy_port: 5432
     schedules:
       - name: "always-on"
         start: "0 0 * * *"
@@ -1024,13 +1096,19 @@ instances:
 	// Verify specific service ports
 	expectedPorts := []int{3000, 8080, 9090}
 	for i, expectedPort := range expectedPorts {
-		if webInstance.Services[i].HTTP.Port != expectedPort {
-			t.Errorf("Expected service %d port %d, got %d", i, expectedPort, webInstance.Services[i].HTTP.Port)
+		if webInstance.Services[i].HTTP.ServicePort != expectedPort {
+			t.Errorf("Expected service %d service port %d, got %d", i, expectedPort, webInstance.Services[i].HTTP.ServicePort)
+		}
+		if webInstance.Services[i].HTTP.ProxyPort != expectedPort {
+			t.Errorf("Expected service %d proxy port %d, got %d", i, expectedPort, webInstance.Services[i].HTTP.ProxyPort)
 		}
 	}
 
 	// Verify database service port
-	if dbInstance.Services[0].HTTP.Port != 5432 {
-		t.Errorf("Expected database service port 5432, got %d", dbInstance.Services[0].HTTP.Port)
+	if dbInstance.Services[0].HTTP.ServicePort != 5432 {
+		t.Errorf("Expected database service port 5432, got %d", dbInstance.Services[0].HTTP.ServicePort)
+	}
+	if dbInstance.Services[0].HTTP.ProxyPort != 5432 {
+		t.Errorf("Expected database proxy port 5432, got %d", dbInstance.Services[0].HTTP.ProxyPort)
 	}
 }

@@ -172,10 +172,10 @@ func Load(r io.Reader) (*Config, error) {
 			}
 			if s.HTTP != nil {
 				if s.HTTP.ServicePort <= 0 || s.HTTP.ServicePort > 65535 {
-					return nil, fmt.Errorf("service %q in instance %q has invalid service http port %d", s.Name, i.Name, s.HTTP.Port)
+					return nil, fmt.Errorf("service %q in instance %q has invalid service http port %d", s.Name, i.Name, s.HTTP.ServicePort)
 				}
 				if s.HTTP.ProxyPort <= 0 || s.HTTP.ProxyPort > 65535 {
-					return nil, fmt.Errorf("service %q in instance %q has invalid proxy http port %d", s.Name, i.Name, s.HTTP.Port)
+					return nil, fmt.Errorf("service %q in instance %q has invalid proxy http port %d", s.Name, i.Name, s.HTTP.ProxyPort)
 				}
 			}
 		}
