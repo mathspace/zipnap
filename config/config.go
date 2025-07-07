@@ -23,7 +23,9 @@ type EC2 struct {
 // to be active when request sent to path / on given port returns a 2xx-3xx
 // status code.
 type HTTP struct {
-	Port int `yaml:"port"`
+	ServicePort     int  `yaml:"service_port"`
+	ProxyPort       int  `yaml:"proxy_port"`
+	ShowWaitingPage bool `yaml:"show_waiting_page,omitempty"`
 }
 
 type ServiceType string
@@ -169,8 +171,11 @@ func Load(r io.Reader) (*Config, error) {
 				return nil, fmt.Errorf("service %q in instance %q of type %q must have HTTP configuration", s.Name, i.Name, s.Type)
 			}
 			if s.HTTP != nil {
-				if s.HTTP.Port <= 0 || s.HTTP.Port > 65535 {
-					return nil, fmt.Errorf("service %q in instance %q has invalid http port %d", s.Name, i.Name, s.HTTP.Port)
+				if s.HTTP.ServicePort <= 0 || s.HTTP.ServicePort > 65535 {
+					return nil, fmt.Errorf("service %q in instance %q has invalid service http port %d", s.Name, i.Name, s.HTTP.Port)
+				}
+				if s.HTTP.ProxyPort <= 0 || s.HTTP.ProxyPort > 65535 {
+					return nil, fmt.Errorf("service %q in instance %q has invalid proxy http port %d", s.Name, i.Name, s.HTTP.Port)
 				}
 			}
 		}
