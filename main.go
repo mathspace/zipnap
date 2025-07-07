@@ -27,6 +27,8 @@ const (
 var (
 	configPath string
 
+	cfgInst config.Instance
+
 	// activeRequests is the number of active requests in flight.
 	// It's updated on connection and disconnection.
 	activeRequests atomic.Int32
@@ -45,61 +47,59 @@ var (
 //go:embed waiting.html
 var waitingPageBytes []byte
 
+func httpHandler(w http.ResponseWriter, r *http.Request) {
+	activeRequests.Add(1)
+	defer activeRequests.Add(-1)
+
+	// Show waiting page OR block the response until EC2 is ready.
+
+	status := ec2CurStatus.Load().(ec2Status)
+	if status != ec2StatusReady {
+
+		if status == ec2StatusDown {
+			// Nudge the EC2 instance to wake up if it's not ready, without
+			// blocking.
+			select {
+			case wakeupEC2Ch <- struct{}{}:
+			default:
+			}
+		}
+
+		if cfgInst.Services[0].HTTP.ShowWaitingPage {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write(waitingPageBytes)
+			return
+		}
+		ec2ReadyCond.L.Lock()
+		for ec2CurStatus.Load().(ec2Status) != ec2StatusReady {
+			ec2ReadyCond.Wait()
+		}
+		ec2ReadyCond.L.Unlock()
+	}
+
+	// Proxy the request to the EC2 instance.
+
+	host := ec2IPAddress.Load().(string)
+	if cfgInst.Services[0].HTTP.ServicePort != 80 {
+		host += strconv.Itoa(cfgInst.Services[0].HTTP.ServicePort)
+	}
+	u := &url.URL{
+		Scheme: "http",
+		Host:   host,
+	}
+	reverseProxy := httputil.NewSingleHostReverseProxy(u)
+	reverseProxy.ServeHTTP(w, r)
+}
+
 func run() error {
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	cfgInst := cfg.Instances[0]
+	cfgInst = cfg.Instances[0]
 
 	ec2CurStatus.Store(ec2StatusDown)
-
-	// Handle HTTP requests.
-	httpHandler := func(w http.ResponseWriter, r *http.Request) {
-		activeRequests.Add(1)
-		defer activeRequests.Add(-1)
-
-		// Show waiting page OR block the response until EC2 is ready.
-
-		status := ec2CurStatus.Load().(ec2Status)
-		if status != ec2StatusReady {
-
-			if status == ec2StatusDown {
-				// Nudge the EC2 instance to wake up if it's not ready, without
-				// blocking.
-				select {
-				case wakeupEC2Ch <- struct{}{}:
-				default:
-				}
-			}
-
-			if cfgInst.Services[0].HTTP.ShowWaitingPage {
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				w.Write(waitingPageBytes)
-				return
-			}
-			ec2ReadyCond.L.Lock()
-			for ec2CurStatus.Load().(ec2Status) != ec2StatusReady {
-				ec2ReadyCond.Wait()
-			}
-			ec2ReadyCond.L.Unlock()
-		}
-
-		// Proxy the request to the EC2 instance.
-
-		host := ec2IPAddress.Load().(string)
-		if cfgInst.Services[0].HTTP.ServicePort != 80 {
-			host += strconv.Itoa(cfgInst.Services[0].HTTP.ServicePort)
-		}
-		u := &url.URL{
-			Scheme: "http",
-			Host:   host,
-		}
-		reverseProxy := httputil.NewSingleHostReverseProxy(u)
-		reverseProxy.ServeHTTP(w, r)
-
-	}
 
 	http.HandleFunc("/", httpHandler)
 	http.ListenAndServe(fmt.Sprintf(":%d", cfgInst.Services[0].HTTP.ProxyPort), nil)
