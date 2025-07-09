@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -44,8 +45,12 @@ var (
 	ec2IPAddress atomic.Value
 )
 
-//go:embed waiting.html
-var waitingPageBytes []byte
+var (
+	//go:embed waiting.html
+	waitingPageBytes []byte
+
+	waitingPageTpl = template.Must(template.New("").Parse(string(waitingPageBytes)))
+)
 
 func httpHandler(w http.ResponseWriter, r *http.Request) {
 	activeRequests.Add(1)
@@ -68,7 +73,9 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 		if cfgInst.Services[0].HTTP.ShowWaitingPage {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write(waitingPageBytes)
+			waitingPageTpl.Execute(w, map[string]any{
+				"Name": cfgInst.Services[0].Name,
+			})
 			return
 		}
 		ec2ReadyCond.L.Lock()
@@ -102,6 +109,8 @@ func run() error {
 	ec2CurStatus.Store(ec2StatusDown)
 
 	http.HandleFunc("/", httpHandler)
+
+	log.Printf("starting http proxy on port %d", cfgInst.Services[0].HTTP.ProxyPort)
 	http.ListenAndServe(fmt.Sprintf(":%d", cfgInst.Services[0].HTTP.ProxyPort), nil)
 
 	return err

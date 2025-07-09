@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Service will be up shortly - ZipNap</title>
+    <title>{{ .Name }} will be up shortly - ZipNap</title>
     <style>
       * {
         margin: 0;
@@ -199,8 +199,8 @@
     </div>
 
     <div class="container">
-      <div class="logo">ZipNap</div>
-      <h1 class="title">Service will be up shortly ...</h1>
+      <div class="logo">{{ .Name }}</div>
+      <h1 class="title">will be up shortly ...</h1>
       <p class="subtitle">Hang tight! Cogs are turning.</p>
       <div class="spinner"></div>
       <div class="refresh-info">
