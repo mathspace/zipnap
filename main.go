@@ -157,9 +157,6 @@ func ec2ReconciliationLoop() {
 		for d := range connDeltaCh {
 			connCount.Add(int32(d))
 			lastActivityTime.Store(time.Now())
-			if connCount.Load() == 0 {
-				log.Printf("last connection closed")
-			}
 		}
 	}()
 
