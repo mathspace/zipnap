@@ -126,8 +126,8 @@ func getEC2Details(ctx context.Context, instanceID string) (ec2InstanceDetails, 
 	ret := ec2InstanceDetails{}
 
 	// Get the current status of the EC2 instance.
-	out, err := ec2Client.DescribeInstances(context.TODO(), &ec2.DescribeInstancesInput{
-		InstanceIds: []string{cfgInst.EC2.InstanceID},
+	out, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
 	})
 	if err != nil {
 		return ret, err
@@ -161,7 +161,12 @@ func ec2ReconciliationLoop() {
 	}()
 
 	timer := time.NewTicker(timerInterval)
+	var ctxCancel context.CancelFunc
+	var ctx context.Context
 	for {
+		if ctxCancel != nil {
+			ctxCancel()
+		}
 		// Wait for either 5 seconds or a wakeup signal.
 		var wakeupRequested bool
 		select {
@@ -169,14 +174,36 @@ func ec2ReconciliationLoop() {
 		case <-wakeupEC2Ch:
 			wakeupRequested = true
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timerInterval-time.Second)
+		ctx, ctxCancel = context.WithTimeout(context.Background(), timerInterval-time.Second)
 		details, err := getEC2Details(ctx, cfgInst.EC2.InstanceID)
-		cancel()
 		if err != nil {
 			log.Printf("error getting EC2 instance details: %v", err)
 			continue
 		}
 		ec2IPAddress.Store(details.IP)
+
+		if details.State == ec2types.InstanceStateNameRunning {
+			u := fmt.Sprintf("%s:%d", details.IP, cfgInst.Services[0].HTTP.ServicePort)
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				log.Printf("health-check: request to %s failed: %v", u, err)
+				ec2CurStatus.Store(ec2StatusNotReady)
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 500 {
+				log.Printf("health-check: request to %s returned status %d", u, resp.StatusCode)
+				ec2CurStatus.Store(ec2StatusNotReady)
+				continue
+			}
+			log.Printf("health-check: EC2 instance %s is healthy", cfgInst.EC2.InstanceID)
+			ec2CurStatus.Store(ec2StatusReady)
+			ec2ReadyCond.Broadcast()
+			continue
+		}
+		
+		ec2CurStatus.Store(ec2StatusNotReady)
 
 		if wakeupRequested && details.State == ec2types.InstanceStateNameStopped {
 			log.Printf("waking up EC2 instance %s", cfgInst.EC2.InstanceID)
@@ -185,6 +212,7 @@ func ec2ReconciliationLoop() {
 			}); err != nil {
 				log.Printf("error starting EC2 instance %s: %v", cfgInst.EC2.InstanceID, err)
 			}
+
 		} else if connCount.Load() == 0 && time.Since(lastActivityTime.Load().(time.Time)) > cfgInst.Timeout.Duration {
 			log.Printf("stopping EC2 instance %s due to inactivity", cfgInst.EC2.InstanceID)
 			if _, err := ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
@@ -193,10 +221,6 @@ func ec2ReconciliationLoop() {
 			}); err != nil {
 				log.Printf("error stopping EC2 instance %s: %v", cfgInst.EC2.InstanceID, err)
 			}
-
-		} else if details.State == ec2types.InstanceStateNameRunning {
-			ec2CurStatus.Store(ec2StatusReady)
-			ec2ReadyCond.Broadcast()
 		}
 
 	}
@@ -215,6 +239,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to create EC2 client: %w", err)
 	}
+
+	go ec2ReconciliationLoop()
 
 	http.HandleFunc("/", httpHandler)
 
