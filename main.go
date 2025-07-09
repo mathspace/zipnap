@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"flag"
 	"fmt"
@@ -12,6 +13,12 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/mathspace/zipnap/config"
 )
@@ -19,10 +26,8 @@ import (
 type ec2Status string
 
 const (
-	ec2StatusReady  ec2Status = "ready"
-	ec2StatusUp     ec2Status = "up"
-	ec2StatusWaking ec2Status = "waking"
-	ec2StatusDown   ec2Status = "down"
+	ec2StatusReady    ec2Status = "ready"
+	ec2StatusNotReady ec2Status = "not_ready"
 )
 
 var (
@@ -30,9 +35,9 @@ var (
 
 	cfgInst config.Instance
 
-	// activeRequests is the number of active requests in flight.
-	// It's updated on connection and disconnection.
-	activeRequests atomic.Int32
+	// connDeltaCh is a channel used to signal changes in the number of active
+	// requests.
+	connDeltaCh = make(chan int, 1)
 
 	// wakeupEC2Ch is a channel used to signal that the EC2 instance should be
 	// woken up.
@@ -43,6 +48,8 @@ var (
 	ec2ReadyCond = sync.NewCond(&sync.Mutex{})
 
 	ec2IPAddress atomic.Value
+
+	ec2Client *ec2.Client
 )
 
 var (
@@ -52,16 +59,19 @@ var (
 	waitingPageTpl = template.Must(template.New("").Parse(string(waitingPageBytes)))
 )
 
+// httpHandler handles incoming HTTP requests and proxies them to HTTP service.
 func httpHandler(w http.ResponseWriter, r *http.Request) {
-	activeRequests.Add(1)
-	defer activeRequests.Add(-1)
+	connDeltaCh <- 1
+	defer func() {
+		connDeltaCh <- -1
+	}()
 
 	// Show waiting page OR block the response until EC2 is ready.
 
 	status := ec2CurStatus.Load().(ec2Status)
 	if status != ec2StatusReady {
 
-		if status == ec2StatusDown {
+		if status == ec2StatusNotReady {
 			// Nudge the EC2 instance to wake up if it's not ready, without
 			// blocking.
 			select {
@@ -99,6 +109,99 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 	reverseProxy.ServeHTTP(w, r)
 }
 
+type ec2InstanceDetails struct {
+	IP    string
+	State ec2types.InstanceStateName
+}
+
+func getEC2Client(ctx context.Context) (*ec2.Client, error) {
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ec2.NewFromConfig(awsCfg), nil
+}
+
+func getEC2Details(ctx context.Context, instanceID string) (ec2InstanceDetails, error) {
+	ret := ec2InstanceDetails{}
+
+	// Get the current status of the EC2 instance.
+	out, err := ec2Client.DescribeInstances(context.TODO(), &ec2.DescribeInstancesInput{
+		InstanceIds: []string{cfgInst.EC2.InstanceID},
+	})
+	if err != nil {
+		return ret, err
+	}
+	for _, inst := range out.Reservations[0].Instances {
+		if inst.State == nil {
+			ret.State = ""
+		} else {
+			ret.State = inst.State.Name
+		}
+		if inst.PrivateIpAddress != nil {
+			ret.IP = *inst.PrivateIpAddress
+		} else {
+			ret.IP = ""
+		}
+	}
+	return ret, nil
+}
+
+func ec2ReconciliationLoop() {
+	const timerInterval = 5 * time.Second
+
+	var lastActivityTime atomic.Value
+	lastActivityTime.Store(time.Now())
+	var connCount atomic.Int32
+	go func() {
+		for d := range connDeltaCh {
+			connCount.Add(int32(d))
+			lastActivityTime.Store(time.Now())
+		}
+	}()
+
+	timer := time.NewTicker(timerInterval)
+	for {
+		// Wait for either 5 seconds or a wakeup signal.
+		var wakeupRequested bool
+		select {
+		case <-timer.C:
+		case <-wakeupEC2Ch:
+			wakeupRequested = true
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timerInterval-time.Second)
+		details, err := getEC2Details(ctx, cfgInst.EC2.InstanceID)
+		cancel()
+		if err != nil {
+			log.Printf("error getting EC2 instance details: %v", err)
+			continue
+		}
+		ec2IPAddress.Store(details.IP)
+
+		if wakeupRequested && details.State == ec2types.InstanceStateNameStopped {
+			log.Printf("waking up EC2 instance %s", cfgInst.EC2.InstanceID)
+			if _, err := ec2Client.StartInstances(ctx, &ec2.StartInstancesInput{
+				InstanceIds: []string{cfgInst.EC2.InstanceID},
+			}); err != nil {
+				log.Printf("error starting EC2 instance %s: %v", cfgInst.EC2.InstanceID, err)
+			}
+		} else if connCount.Load() == 0 && time.Since(lastActivityTime.Load().(time.Time)) > cfgInst.Timeout.Duration {
+			log.Printf("stopping EC2 instance %s due to inactivity", cfgInst.EC2.InstanceID)
+			if _, err := ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
+				InstanceIds: []string{cfgInst.EC2.InstanceID},
+				Hibernate:   aws.Bool(true),
+			}); err != nil {
+				log.Printf("error stopping EC2 instance %s: %v", cfgInst.EC2.InstanceID, err)
+			}
+
+		} else if details.State == ec2types.InstanceStateNameRunning {
+			ec2CurStatus.Store(ec2StatusReady)
+			ec2ReadyCond.Broadcast()
+		}
+
+	}
+}
+
 func run() error {
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
@@ -106,7 +209,12 @@ func run() error {
 	}
 	cfgInst = cfg.Instances[0]
 
-	ec2CurStatus.Store(ec2StatusDown)
+	ec2CurStatus.Store(ec2StatusNotReady)
+
+	ec2Client, err = getEC2Client(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to create EC2 client: %w", err)
+	}
 
 	http.HandleFunc("/", httpHandler)
 
