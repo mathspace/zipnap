@@ -23,9 +23,10 @@ type EC2 struct {
 // to be active when request sent to path / on given port returns a 2xx-3xx
 // status code.
 type HTTP struct {
-	ServicePort     int  `yaml:"service_port"`
-	ProxyPort       int  `yaml:"proxy_port"`
-	ShowWaitingPage bool `yaml:"show_waiting_page,omitempty"`
+	ServicePort     int    `yaml:"service_port"`
+	ProxyPort       int    `yaml:"proxy_port"`
+	ProxyHost       string `yaml:"proxy_host,omitempty"`
+	ShowWaitingPage bool   `yaml:"show_waiting_page,omitempty"`
 }
 
 type ServiceType string

@@ -7,21 +7,18 @@ import "context"
 // proxy service.
 type Proxy interface {
 
-	// Start the proxy service, which should include any necessary setup and
-	// configuration. Start must not block.
+	// Starts the proxy service and blocks until context is cancelled. It will
+	// return nil if the service is stopped because of context cancellation and
+	// it's gracefully shutdown.
 	//
 	// waitHealthy is a function that the proxy can call to wait for the service
 	// to be ready to accept connections.
 	//
 	// If waitReady returns with nil error, the service is considered up and
 	// ready to accept connections.
-	Start(waitHealthy func(ctx context.Context) error) error
+	Run(ctx context.Context, waitHealthy func(ctx context.Context) error) error
 
 	// IsServiceHealthy checks if the service is healthy and ready to
 	// accept connections.
-	IsServiceHealthy(ctx context.Context, host string) (bool, error)
-
-	// Kill instructs the proxy to stop and clean up any resources it has
-	// allocated.Kill must block until the proxy is completely stopped.
-	Kill(ctx context.Context) error
+	IsServiceHealthy(ctx context.Context, hostName string) (bool, error)
 }
