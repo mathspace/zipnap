@@ -5,12 +5,8 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
-	"html/template"
 	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,63 +47,6 @@ var (
 
 	ec2Client *ec2.Client
 )
-
-var (
-	//go:embed waiting.html
-	waitingPageBytes []byte
-
-	waitingPageTpl = template.Must(template.New("").Parse(string(waitingPageBytes)))
-)
-
-// httpHandler handles incoming HTTP requests and proxies them to HTTP service.
-func httpHandler(w http.ResponseWriter, r *http.Request) {
-	connDeltaCh <- 1
-	defer func() {
-		connDeltaCh <- -1
-	}()
-
-	// Show waiting page OR block the response until EC2 is ready.
-
-	status := ec2CurStatus.Load().(ec2Status)
-	if status != ec2StatusReady {
-
-		if status == ec2StatusNotReady {
-			// Nudge the EC2 instance to wake up if it's not ready, without
-			// blocking.
-			select {
-			case wakeupEC2Ch <- struct{}{}:
-			default:
-			}
-		}
-
-		if cfgInst.Services[0].HTTP.ShowWaitingPage {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			waitingPageTpl.Execute(w, map[string]any{
-				"Name": cfgInst.Services[0].Name,
-			})
-			return
-		}
-		ec2ReadyCond.L.Lock()
-		for ec2CurStatus.Load().(ec2Status) != ec2StatusReady {
-			ec2ReadyCond.Wait()
-		}
-		ec2ReadyCond.L.Unlock()
-	}
-
-	// Proxy the request to the EC2 instance.
-
-	host := ec2IPAddress.Load().(string)
-	if cfgInst.Services[0].HTTP.ServicePort != 80 {
-		host += ":" + strconv.Itoa(cfgInst.Services[0].HTTP.ServicePort)
-	}
-	u := &url.URL{
-		Scheme: "http",
-		Host:   host,
-	}
-	reverseProxy := httputil.NewSingleHostReverseProxy(u)
-	reverseProxy.ServeHTTP(w, r)
-}
 
 type ec2InstanceDetails struct {
 	IP    string
@@ -250,8 +189,6 @@ func run() error {
 	}
 
 	go ec2ReconciliationLoop()
-
-	http.HandleFunc("/", httpHandler)
 
 	log.Printf("starting http proxy on port %d", cfgInst.Services[0].HTTP.ProxyPort)
 	http.ListenAndServe(fmt.Sprintf(":%d", cfgInst.Services[0].HTTP.ProxyPort), nil)

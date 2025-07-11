@@ -16,7 +16,7 @@ type Proxy interface {
 	//
 	// If waitReady returns with nil error, the service is considered up and
 	// ready to accept connections.
-	Run(ctx context.Context, waitHealthy func(ctx context.Context) error) error
+	Run(ctx context.Context, waitHealthy func(ctx context.Context) (host string, err error)) error
 
 	// IsServiceHealthy checks if the service is healthy and ready to
 	// accept connections.
