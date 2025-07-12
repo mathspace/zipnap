@@ -24,14 +24,14 @@ var (
 )
 
 type HTTPProxy struct {
-	cfg config.HTTP
-	svc config.Service
+	cfg    config.Service
+	logger *log.Logger
 }
 
-func New(cfg config.HTTP, svc config.Service) *HTTPProxy {
+func New(cfg config.Service) *HTTPProxy {
 	return &HTTPProxy{
-		svc: svc,
-		cfg: cfg,
+		cfg:    cfg,
+		logger: log.New(log.Writer(), fmt.Sprintf("http-proxy(%d->%d): ", cfg.HTTP.ProxyPort, cfg.HTTP.ServicePort), 0),
 	}
 }
 
@@ -44,7 +44,7 @@ func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Contex
 		ctx := r.Context()
 
 		showWaitingPage := errors.New("show waiting page")
-		if p.cfg.ShowWaitingPage {
+		if p.cfg.HTTP.ShowWaitingPage {
 			var cancel func()
 			ctx, cancel = context.WithTimeoutCause(ctx, 1*time.Second, showWaitingPage)
 			defer cancel()
@@ -59,7 +59,7 @@ func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Contex
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.WriteHeader(http.StatusServiceUnavailable)
 				waitingPageTpl.Execute(w, map[string]any{
-					"Name": p.svc.Name,
+					"Name": p.cfg.Name,
 				})
 				return
 			}
@@ -71,7 +71,7 @@ func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Contex
 
 		u := &url.URL{
 			Scheme: "http",
-			Host:   fmt.Sprintf("%s:%d", hostName, p.cfg.ServicePort),
+			Host:   fmt.Sprintf("%s:%d", hostName, p.cfg.HTTP.ServicePort),
 		}
 		httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 	}
@@ -79,7 +79,7 @@ func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Contex
 	// Setup the HTTP server with the handler.
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", p.cfg.ProxyHost, p.cfg.ProxyPort),
+		Addr:    fmt.Sprintf("%s:%d", p.cfg.HTTP.ProxyHost, p.cfg.HTTP.ProxyPort),
 		Handler: http.HandlerFunc(handler),
 	}
 
@@ -93,14 +93,14 @@ func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Contex
 		// start successfully, we still want this goroutine to exit.
 		case <-stopping:
 		}
-		log.Printf("http-proxy(%d->%d): shutting down ...", p.cfg.ProxyPort, p.cfg.ServicePort)
+		p.logger.Print("shutting down ...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		errCh <- server.Shutdown(shutdownCtx)
 	}()
 
 	go func() {
-		log.Printf("http-proxy(%d->%d): starting ...", p.cfg.ProxyPort, p.cfg.ServicePort)
+		p.logger.Print("starting ...")
 		errCh <- server.ListenAndServe()
 		close(stopping)
 	}()
@@ -110,12 +110,12 @@ func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Contex
 			return err
 		}
 	}
-	log.Printf("http-proxy(%d->%d): gracefully shut down", p.cfg.ProxyPort, p.cfg.ServicePort)
+	p.logger.Print("gracefully shut down")
 	return nil
 }
 
 func (p *HTTPProxy) IsServiceHealthy(ctx context.Context, hostName string) (bool, error) {
-	u := fmt.Sprintf("http://%s:%d/", hostName, p.cfg.ServicePort)
+	u := fmt.Sprintf("http://%s:%d/", hostName, p.cfg.HTTP.ServicePort)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
