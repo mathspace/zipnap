@@ -11,8 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
@@ -51,14 +49,6 @@ var (
 type ec2InstanceDetails struct {
 	IP    string
 	State ec2types.InstanceStateName
-}
-
-func getEC2Client(ctx context.Context) (*ec2.Client, error) {
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return ec2.NewFromConfig(awsCfg), nil
 }
 
 func getEC2Details(ctx context.Context, instanceID string) (ec2InstanceDetails, error) {
@@ -134,21 +124,12 @@ func ec2ReconciliationLoop() {
 
 		if wakeupRequested && details.State == ec2types.InstanceStateNameStopped {
 			log.Printf("waking up EC2 instance %s", cfgInst.EC2.InstanceID)
-			if _, err := ec2Client.StartInstances(ctx, &ec2.StartInstancesInput{
-				InstanceIds: []string{cfgInst.EC2.InstanceID},
-			}); err != nil {
-				log.Printf("error starting EC2 instance %s: %v", cfgInst.EC2.InstanceID, err)
-			}
+			// TODO host start
 
 		} else if idle && details.State == ec2types.InstanceStateNameRunning {
 			ec2CurStatus.Store(ec2StatusNotReady)
 			log.Printf("stopping EC2 instance %s due to inactivity", cfgInst.EC2.InstanceID)
-			if _, err := ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
-				InstanceIds: []string{cfgInst.EC2.InstanceID},
-				Hibernate:   aws.Bool(true),
-			}); err != nil {
-				log.Printf("error stopping EC2 instance %s: %v", cfgInst.EC2.InstanceID, err)
-			}
+			// TODO host stop
 
 		} else if details.State == ec2types.InstanceStateNameRunning {
 			u := fmt.Sprintf("http://%s:%d/", details.IP, cfgInst.Services[0].HTTP.ServicePort)

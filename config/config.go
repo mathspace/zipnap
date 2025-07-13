@@ -14,9 +14,6 @@ import (
 // EC2 represents the configuration for an EC2 instance.
 type EC2 struct {
 	InstanceID string `yaml:"instance_id"`
-	// Shutdown indicates whether the instance should be shut down or
-	// hibernated.
-	Shutdown bool `yaml:"shutdown"`
 }
 
 // HTTP represents the configuration for an HTTP service. The service is assumed
