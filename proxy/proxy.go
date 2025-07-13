@@ -1,24 +1,34 @@
 // Package proxy defines an interface for managing a proxy service.
 package proxy
 
-import "context"
+import (
+	"context"
+)
+
+type Callbacks struct {
+	// WaitReady is a function type that is used to wait for the proxy service
+	// to be ready to accept connections. It takes a context and returns the host
+	// name of the service and an error. If the service is ready, it should return
+	// the host name of the service and a nil error. If the service is not ready, it
+	// should return an error indicating that the service is not ready.
+	WaitReady func(ctx context.Context) (host string, err error)
+	// ConnDelta is a function type that is used to signal changes in the number
+	// of active connections. It takes an integer delta that indicates the change in
+	// the number of connections. A positive delta indicates an increase in
+	// connections, while a negative delta indicates a decrease.
+	ConnDelta func(delta int)
+}
 
 // Proxy is an interface that defines the methods required to manage a
 // proxy service.
 type Proxy interface {
-
 	// Starts the proxy service and blocks until context is cancelled. It will
 	// return nil if the service is stopped because of context cancellation and
 	// it's gracefully shutdown.
-	//
-	// waitHealthy is a function that the proxy can call to wait for the service
-	// to be ready to accept connections.
-	//
-	// If waitReady returns with nil error, the service is considered up and
-	// ready to accept connections.
-	Run(ctx context.Context, waitHealthy func(ctx context.Context) (host string, err error)) error
+	Run(context.Context, Callbacks) error
 
-	// IsServiceHealthy checks if the service is healthy and ready to
-	// accept connections.
-	IsServiceHealthy(ctx context.Context, hostName string) (bool, error)
+	// Ping checks if the host service is up and ready to accept connections.
+	// Ping is called periodically by the reconciler to assess the health of the
+	// proxied service.
+	Ping(ctx context.Context, hostName string) (bool, error)
 }

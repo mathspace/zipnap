@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,17 +16,8 @@ import (
 	"github.com/mathspace/zipnap/config"
 )
 
-type ec2Status string
-
-const (
-	ec2StatusReady    ec2Status = "ready"
-	ec2StatusNotReady ec2Status = "not_ready"
-)
-
 var (
 	configPath string
-
-	cfgInst config.Instance
 
 	// connDeltaCh is a channel used to signal changes in the number of active
 	// requests.
@@ -36,14 +26,6 @@ var (
 	// wakeupEC2Ch is a channel used to signal that the EC2 instance should be
 	// woken up.
 	wakeupEC2Ch = make(chan struct{}, 1)
-
-	// ec2CurStatus is the current status of the EC2 instance.
-	ec2CurStatus atomic.Value
-	ec2ReadyCond = sync.NewCond(&sync.Mutex{})
-
-	ec2IPAddress atomic.Value
-
-	ec2Client *ec2.Client
 )
 
 type ec2InstanceDetails struct {

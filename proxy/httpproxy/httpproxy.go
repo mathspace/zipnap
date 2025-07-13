@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mathspace/zipnap/config"
+	"github.com/mathspace/zipnap/proxy"
 )
 
 var (
@@ -35,12 +36,14 @@ func New(cfg config.Service) *HTTPProxy {
 	}
 }
 
-func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Context) (string, error)) error {
+func (p *HTTPProxy) Run(ctx context.Context, cb proxy.Callbacks) error {
 
 	// Create a handler that will wait for the service to be healthy and then
 	// proxy the request to the EC2 instance.
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
+		cb.ConnDelta(1)
+		defer cb.ConnDelta(-1)
 		ctx := r.Context()
 
 		showWaitingPage := errors.New("show waiting page")
@@ -50,7 +53,7 @@ func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Contex
 			defer cancel()
 		}
 
-		hostName, err := waitHealthy(ctx)
+		hostName, err := cb.WaitReady(ctx)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) && context.Cause(ctx) == showWaitingPage {
 
@@ -114,7 +117,7 @@ func (p *HTTPProxy) Run(ctx context.Context, waitHealthy func(ctx context.Contex
 	return nil
 }
 
-func (p *HTTPProxy) IsServiceHealthy(ctx context.Context, hostName string) (bool, error) {
+func (p *HTTPProxy) Ping(ctx context.Context, hostName string) (bool, error) {
 	u := fmt.Sprintf("http://%s:%d/", hostName, p.cfg.HTTP.ServicePort)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	resp, err := http.DefaultClient.Do(req)

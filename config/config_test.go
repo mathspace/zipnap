@@ -17,7 +17,6 @@ instances:
     timeout: "30s"
     ec2:
       instance_id: "i-1234567890abcdef0"
-      shutdown: true
     services:
       - name: "web"
         type: "http"
@@ -55,9 +54,6 @@ instances:
 	}
 	if instance.EC2.InstanceID != "i-1234567890abcdef0" {
 		t.Errorf("Expected instance ID 'i-1234567890abcdef0', got %q", instance.EC2.InstanceID)
-	}
-	if !instance.EC2.Shutdown {
-		t.Error("Expected shutdown to be true")
 	}
 
 	if len(instance.Services) != 1 {
@@ -102,7 +98,6 @@ instances:
     timeout: "1s"
     ec2:
       instance_id: "i-1234567890abcdef0"
-      shutdown: false
 `
 
 	config, err := Load(strings.NewReader(configYAML))
@@ -134,7 +129,6 @@ instances:
     timeout: "30s"
     ec2:
       instance_id: "i-1234567890abcdef0"
-      shutdown: false
     services:
       - name: "web"
         type: "http"
@@ -146,7 +140,6 @@ instances:
     timeout: "45s"
     ec2:
       instance_id: "i-0987654321fedcba0"
-      shutdown: true
     services:
       - name: "api"
         type: "http"
@@ -174,17 +167,11 @@ instances:
 	if instance1.Name != "web-server" {
 		t.Errorf("Expected first instance name 'web-server', got %q", instance1.Name)
 	}
-	if instance1.EC2.Shutdown {
-		t.Error("Expected first instance shutdown to be false")
-	}
 
 	// Check second instance
 	instance2 := config.Instances[1]
 	if instance2.Name != "api-server" {
 		t.Errorf("Expected second instance name 'api-server', got %q", instance2.Name)
-	}
-	if !instance2.EC2.Shutdown {
-		t.Error("Expected second instance shutdown to be true")
 	}
 	if len(instance2.Services) != 2 {
 		t.Errorf("Expected 2 services in second instance, got %d", len(instance2.Services))
@@ -287,8 +274,7 @@ instances:
   - name: "web-server"
     type: "ec2"
     timeout: "30s"
-    ec2:
-      shutdown: true
+    ec2: {}
 `,
 			expectedErr: "must have a valid instance_id",
 		},
@@ -301,7 +287,6 @@ instances:
     timeout: "30s"
     ec2:
       instance_id: ""
-      shutdown: true
 `,
 			expectedErr: "must have a valid instance_id",
 		},
@@ -824,7 +809,6 @@ instances:
     timeout: "30s"
     ec2:
       instance_id: "i-test123"
-      shutdown: true
 `
 
 	if err := os.WriteFile(tmpFile, []byte(validYAML), 0644); err != nil {
@@ -1006,7 +990,6 @@ instances:
     timeout: "2m30s"
     ec2:
       instance_id: "i-web123456789abcdef0"
-      shutdown: false
     services:
       - name: "frontend"
         type: "http"
@@ -1035,7 +1018,6 @@ instances:
     timeout: "5m"
     ec2:
       instance_id: "i-db123456789abcdef0"
-      shutdown: true
     services:
       - name: "postgres"
         type: "http"
@@ -1065,9 +1047,6 @@ instances:
 	if webInstance.Timeout.Duration != 2*time.Minute+30*time.Second {
 		t.Errorf("Expected timeout 2m30s, got %v", webInstance.Timeout.Duration)
 	}
-	if webInstance.EC2.Shutdown {
-		t.Error("Expected web-cluster shutdown to be false")
-	}
 	if len(webInstance.Services) != 3 {
 		t.Errorf("Expected 3 services in web-cluster, got %d", len(webInstance.Services))
 	}
@@ -1082,9 +1061,6 @@ instances:
 	}
 	if dbInstance.Timeout.Duration != 5*time.Minute {
 		t.Errorf("Expected timeout 5m, got %v", dbInstance.Timeout.Duration)
-	}
-	if !dbInstance.EC2.Shutdown {
-		t.Error("Expected database shutdown to be true")
 	}
 	if len(dbInstance.Services) != 1 {
 		t.Errorf("Expected 1 service in database, got %d", len(dbInstance.Services))
