@@ -16,14 +16,26 @@ type EC2 struct {
 	InstanceID string `yaml:"instance_id"`
 }
 
+// StoreForwardRule represents a rule for storing and forwarding HTTP requests
+// while the host is down.
+type StoreForwardRule struct {
+	// Method is the HTTP method (GET, POST, etc.) that this rule applies to.
+	// Leave empty to match all methods.
+	Method string `yaml:"http_method"`
+	// Path is the path that this rule applies to. It can be a full path or a
+	// prefix. If it is a prefix, it should end with a slash (e.g., "/api/").
+	Path string `yaml:"path"`
+}
+
 // HTTP represents the configuration for an HTTP service. The service is assumed
 // to be active when request sent to path / on given port returns a 2xx-3xx
 // status code.
 type HTTP struct {
-	ServicePort     int    `yaml:"service_port"`
-	ProxyPort       int    `yaml:"proxy_port"`
-	ProxyHost       string `yaml:"proxy_host,omitempty"`
-	ShowWaitingPage bool   `yaml:"show_waiting_page,omitempty"`
+	ServicePort       int                `yaml:"service_port"`
+	ProxyPort         int                `yaml:"proxy_port"`
+	ProxyHost         string             `yaml:"proxy_host,omitempty"`
+	ShowWaitingPage   bool               `yaml:"show_waiting_page,omitempty"`
+	StoreForwardRules []StoreForwardRule `yaml:"store_forward_rules,omitempty"`
 }
 
 type ServiceType string
