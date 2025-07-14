@@ -6,12 +6,12 @@ import (
 )
 
 type Callbacks struct {
-	// WaitReady is a function type that is used to wait for the proxy service
-	// to be ready to accept connections. It takes a context and returns the host
-	// name of the service and an error. If the service is ready, it should return
-	// the host name of the service and a nil error. If the service is not ready, it
-	// should return an error indicating that the service is not ready.
-	WaitReady func(ctx context.Context) (host string, err error)
+	// Ready indicates whether the service on the host is ready to serve requests.
+	// If wait is true, it will block until the service is ready, context is
+	// cancelled or an error occurs. If wait is false, it will return
+	// immediately with the readiness status. host is the host name where the
+	// service is running.
+	Ready func(ctx context.Context, wait bool) (ready bool, host string, err error)
 	// ConnDelta is a function type that is used to signal changes in the number
 	// of active connections. It takes an integer delta that indicates the change in
 	// the number of connections. A positive delta indicates an increase in

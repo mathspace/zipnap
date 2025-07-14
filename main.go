@@ -12,9 +12,27 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/robfig/cron/v3"
 
 	"github.com/mathspace/zipnap/config"
+	"github.com/mathspace/zipnap/proxy"
 )
+
+type instanceProxy struct {
+	activeConns     atomic.Int32
+	lastDisconnTime atomic.Value // time.Time
+}
+
+type instanceSchedule struct {
+	c *cron.Cron
+	dur time.Duration
+}
+
+type instance struct {
+	cfg       config.Instance
+	proxies   map[proxy.Proxy]*instanceProxy
+	schedules []*cron.Cron
+}
 
 var (
 	configPath string

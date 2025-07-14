@@ -46,31 +46,24 @@ func (p *HTTPProxy) Run(ctx context.Context, cb proxy.Callbacks) error {
 		defer cb.ConnDelta(-1)
 		ctx := r.Context()
 
-		showWaitingPage := errors.New("show waiting page")
-		if p.cfg.HTTP.ShowWaitingPage {
-			var cancel func()
-			ctx, cancel = context.WithTimeoutCause(ctx, 1*time.Second, showWaitingPage)
-			defer cancel()
-		}
-
-		hostName, err := cb.WaitReady(ctx)
+		ready, hostName, err := cb.Ready(ctx, !p.cfg.HTTP.ShowWaitingPage)
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) && context.Cause(ctx) == showWaitingPage {
-
-				// Show waiting page.
-
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				waitingPageTpl.Execute(w, map[string]any{
-					"Name": p.cfg.Name,
-				})
-				return
-			}
 			http.Error(w, fmt.Sprintf("error waiting for service to be healthy: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		// Proxy the request to the EC2 instance.
+		// Show waiting page if service not ready.
+
+		if !ready && p.cfg.HTTP.ShowWaitingPage {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			waitingPageTpl.Execute(w, map[string]any{
+				"Name": p.cfg.Name,
+			})
+			return
+		}
+
+		// Proxy the request to the EC2 instance otherwise.
 
 		u := &url.URL{
 			Scheme: "http",

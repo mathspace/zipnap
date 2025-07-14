@@ -38,11 +38,21 @@ type HTTP struct {
 	StoreForwardRules []StoreForwardRule `yaml:"store_forward_rules,omitempty"`
 }
 
+// TCP represents the configuration for a TCP service. The service is assumed to
+// be active when a TCP connection to the service port is established
+// successfully.
+type TCP struct {
+	ServicePort int    `yaml:"service_port"`
+	ProxyPort   int    `yaml:"proxy_port"`
+	ProxyHost   string `yaml:"proxy_host,omitempty"`
+}
+
 type ServiceType string
 
 // ServiceType represents the type of service.
 const (
 	ServiceTypeHTTP ServiceType = "http"
+	ServiceTypeTCP  ServiceType = "tcp"
 )
 
 func (st *ServiceType) UnmarshalYAML(n *yaml.Node) error {
@@ -51,6 +61,9 @@ func (st *ServiceType) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	*st = ServiceType(s)
+	if *st != ServiceTypeHTTP && *st != ServiceTypeTCP {
+		return fmt.Errorf("invalid service type %q, must be one of %q or %q", s, ServiceTypeHTTP, ServiceTypeTCP)
+	}
 	return nil
 }
 
@@ -59,6 +72,7 @@ type Service struct {
 	Name string      `yaml:"name"`
 	Type ServiceType `yaml:"type"`
 	HTTP *HTTP       `yaml:"http,omitempty"`
+	TCP  *TCP        `yaml:"tcp,omitempty"`
 }
 
 type CronSchedule struct {
@@ -125,17 +139,17 @@ func (it *InstanceType) UnmarshalYAML(n *yaml.Node) error {
 
 // Instance represents a machine that runs services to be proxied.
 type Instance struct {
-	Name      string       `yaml:"name"`
-	Type      InstanceType `yaml:"type"`
-	EC2       *EC2         `yaml:"ec2,omitempty"`
-	Timeout   Duration     `yaml:"timeout"`
-	Services  []Service    `yaml:"services,omitempty"`
-	Schedules []Schedule   `yaml:"schedules,omitempty"`
+	Name      string              `yaml:"name"`
+	Type      InstanceType        `yaml:"type"`
+	EC2       *EC2                `yaml:"ec2,omitempty"`
+	Timeout   Duration            `yaml:"timeout"`
+	Services  map[string]Service  `yaml:"services,omitempty"`
+	Schedules map[string]Schedule `yaml:"schedules,omitempty"`
 }
 
 // Config represents the configuration for the application.
 type Config struct {
-	Instances []Instance `yaml:"instances"`
+	Instances map[string]Instance `yaml:"instances"`
 }
 
 // Load reads the configuration from the provided io.Reader, validates it
@@ -152,52 +166,52 @@ func Load(r io.Reader) (*Config, error) {
 
 	// Validate the configuration
 
-	for _, i := range config.Instances {
-		if i.Name == "" {
-			return nil, fmt.Errorf("instance must have a name")
+	for instID, i := range config.Instances {
+		if instID == "" || i.Name == "" {
+			return nil, fmt.Errorf("instance must have a non-blank ID and a name")
 		}
 		if i.Timeout.Duration <= 0 {
-			return nil, fmt.Errorf("instance %q must have a positive timeout", i.Name)
+			return nil, fmt.Errorf("instance %q must have a positive timeout", instID)
 		}
 		if i.Type != InstanceTypeEC2 {
-			return nil, fmt.Errorf("instance %q has unsupported type %q", i.Name, i.Type)
+			return nil, fmt.Errorf("instance %q has unsupported type %q", instID, i.Type)
 		}
 		if i.Type == InstanceTypeEC2 && i.EC2 == nil {
-			return nil, fmt.Errorf("instance %q of type %q must have EC2 configuration", i.Name, i.Type)
+			return nil, fmt.Errorf("instance %q of type %q must have EC2 configuration", instID, i.Type)
 		}
 		if i.EC2 != nil {
 			if i.EC2.InstanceID == "" {
-				return nil, fmt.Errorf("instance %q of type %q must have a valid instance_id", i.Name, i.Type)
+				return nil, fmt.Errorf("instance %q of type %q must have a valid instance_id", instID, i.Type)
 			}
 		}
-		for _, s := range i.Services {
-			if s.Name == "" {
-				return nil, fmt.Errorf("service in instance %q must have a name", i.Name)
+		for id, s := range i.Services {
+			if id == "" || s.Name == "" {
+				return nil, fmt.Errorf("service in instance %q must have a non-blank ID and a name", instID)
 			}
 			if s.Type != ServiceTypeHTTP {
-				return nil, fmt.Errorf("service %q in instance %q has unsupported type %q", s.Name, i.Name, s.Type)
+				return nil, fmt.Errorf("service %q in instance %q has unsupported type %q", id, instID, s.Type)
 			}
 			if s.Type == ServiceTypeHTTP && s.HTTP == nil {
-				return nil, fmt.Errorf("service %q in instance %q of type %q must have HTTP configuration", s.Name, i.Name, s.Type)
+				return nil, fmt.Errorf("service %q in instance %q of type %q must have HTTP configuration", id, instID, s.Type)
 			}
 			if s.HTTP != nil {
 				if s.HTTP.ServicePort <= 0 || s.HTTP.ServicePort > 65535 {
-					return nil, fmt.Errorf("service %q in instance %q has invalid service http port %d", s.Name, i.Name, s.HTTP.ServicePort)
+					return nil, fmt.Errorf("service %q in instance %q has invalid service http port %d", id, instID, s.HTTP.ServicePort)
 				}
 				if s.HTTP.ProxyPort <= 0 || s.HTTP.ProxyPort > 65535 {
-					return nil, fmt.Errorf("service %q in instance %q has invalid proxy http port %d", s.Name, i.Name, s.HTTP.ProxyPort)
+					return nil, fmt.Errorf("service %q in instance %q has invalid proxy http port %d", id, instID, s.HTTP.ProxyPort)
 				}
 			}
 		}
-		for _, s := range i.Schedules {
-			if s.Name == "" {
-				return nil, fmt.Errorf("schedule in instance %q must have a name", i.Name)
+		for id, s := range i.Schedules {
+			if id == "" || s.Name == "" {
+				return nil, fmt.Errorf("schedule in instance %q must have a non-blank ID and a name", instID)
 			}
 			if s.Start.Schedule == nil {
-				return nil, fmt.Errorf("schedule %q in instance %q must have a start time", s.Name, i.Name)
+				return nil, fmt.Errorf("schedule %q in instance %q must have a start time", id, instID)
 			}
 			if s.Duration.Duration <= 0 {
-				return nil, fmt.Errorf("schedule %q in instance %q must have a positive duration", s.Name, i.Name)
+				return nil, fmt.Errorf("schedule %q in instance %q must have a positive duration", id, instID)
 			}
 		}
 	}
