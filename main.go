@@ -88,14 +88,14 @@ func (i *instance) runProxies(ctx context.Context) error {
 				p.lastActivityTime.Store(time.Now())
 				p.activeConns.Add(int32(delta))
 			},
-			Ready: func(ctx context.Context, wait bool) (ready bool, hostName string, err error) {
+			Ready: func(ctx context.Context, wait bool) (ready bool, hostName string) {
 
 				// If we are ready or asked not to wait, return immediately.
 				st := i.lastHostState.Load().(host.State)
 				lastPing := p.lastPing.Load()
 				ready = lastPing && st.Status == host.StatusStarted
 				if ready || !wait {
-					return ready, st.HostName, nil
+					return ready, st.HostName
 				}
 
 				// This ensures if the context is cancelled, we stop waiting
@@ -116,13 +116,13 @@ func (i *instance) runProxies(ctx context.Context) error {
 					}
 					i.hostReadyCond.Wait()
 					if ctx.Err() != nil {
-						return false, "", ctx.Err()
+						return false, ""
 					}
 					st := i.lastHostState.Load().(host.State)
 					lastPing := p.lastPing.Load()
 					ready = lastPing && st.Status == host.StatusStarted
 					if ready {
-						return true, st.HostName, nil
+						return true, st.HostName
 					}
 				}
 

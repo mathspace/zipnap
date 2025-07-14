@@ -46,11 +46,7 @@ func (p *HTTPProxy) Run(ctx context.Context, cb proxy.Callbacks) error {
 		defer cb.ConnDelta(-1)
 		ctx := r.Context()
 
-		ready, hostName, err := cb.Ready(ctx, !p.cfg.HTTP.ShowWaitingPage)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("error waiting for service to be healthy: %v", err), http.StatusInternalServerError)
-			return
-		}
+		ready, hostName := cb.Ready(ctx, !p.cfg.HTTP.ShowWaitingPage)
 
 		// Show waiting page if service not ready.
 
