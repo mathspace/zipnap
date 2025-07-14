@@ -29,10 +29,10 @@ type HTTPProxy struct {
 	logger *log.Logger
 }
 
-func New(cfg config.Service) *HTTPProxy {
+func New(cfg config.Service, logger *log.Logger) *HTTPProxy {
 	return &HTTPProxy{
 		cfg:    cfg,
-		logger: log.New(log.Writer(), fmt.Sprintf("http-proxy(%d->%d): ", cfg.HTTP.ProxyPort, cfg.HTTP.ServicePort), 0),
+		logger: logger,
 	}
 }
 

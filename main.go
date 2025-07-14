@@ -7,76 +7,136 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/robfig/cron/v3"
 
 	"github.com/mathspace/zipnap/config"
+	"github.com/mathspace/zipnap/host"
+	"github.com/mathspace/zipnap/host/ec2host"
 	"github.com/mathspace/zipnap/proxy"
+	"github.com/mathspace/zipnap/proxy/httpproxy"
 )
 
 type instanceProxy struct {
-	activeConns     atomic.Int32
-	lastDisconnTime atomic.Value // time.Time
-}
-
-type instanceSchedule struct {
-	c *cron.Cron
-	dur time.Duration
+	p                proxy.Proxy
+	lastPing         atomic.Bool
+	activeConns      atomic.Int32
+	lastActivityTime atomic.Value // time.Time
+	logger           *log.Logger
 }
 
 type instance struct {
-	cfg       config.Instance
-	proxies   map[proxy.Proxy]*instanceProxy
-	schedules []*cron.Cron
+	cfg           config.Instance
+	proxies       map[string]*instanceProxy
+	schedules     map[string]*cron.Cron
+	host          host.Host    // Host interface for managing the EC2 instance
+	lastHostState atomic.Value // host.State
+	wakupCh       chan struct{}
+	hostReadyCond *sync.Cond // Condition variable to signal when the host is ready
+	logger        *log.Logger
 }
 
-var (
-	configPath string
-
-	// connDeltaCh is a channel used to signal changes in the number of active
-	// requests.
-	connDeltaCh = make(chan int, 1)
-
-	// wakeupEC2Ch is a channel used to signal that the EC2 instance should be
-	// woken up.
-	wakeupEC2Ch = make(chan struct{}, 1)
-)
-
-type ec2InstanceDetails struct {
-	IP    string
-	State ec2types.InstanceStateName
-}
-
-func getEC2Details(ctx context.Context, instanceID string) (ec2InstanceDetails, error) {
-	ret := ec2InstanceDetails{}
-
-	// Get the current status of the EC2 instance.
-	out, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: []string{instanceID},
-	})
+func newInstance(ctx context.Context, id string, cfg config.Instance) (*instance, error) {
+	proxies := make(map[string]*instanceProxy, len(cfg.Services))
+	for svcID, svc := range cfg.Services {
+		logger := log.New(os.Stdout, fmt.Sprintf("instance[%s] proxy[%s]: ", svcID), 0)
+		var p proxy.Proxy
+		switch svc.Type {
+		case config.ServiceTypeHTTP:
+			p = httpproxy.New(svc, logger)
+		default:
+			return nil, fmt.Errorf("unsupported service type %s for service %s", svc.Type, svcID)
+		}
+		proxies[svcID] = &instanceProxy{
+			p:      p,
+			logger: logger,
+		}
+	}
+	if cfg.Type != config.InstanceTypeEC2 {
+		return nil, fmt.Errorf("unsupported instance type %s", cfg.Type)
+	}
+	logger := log.New(os.Stdout, fmt.Sprintf("instance[%s]: ", id), 0)
+	h, err := ec2host.New(ctx, cfg, logger)
 	if err != nil {
-		return ret, err
+		return nil, err
 	}
-	for _, inst := range out.Reservations[0].Instances {
-		if inst.State == nil {
-			ret.State = ""
-		} else {
-			ret.State = inst.State.Name
-		}
-		if inst.PrivateIpAddress != nil {
-			ret.IP = *inst.PrivateIpAddress
-		} else {
-			ret.IP = ""
-		}
+
+	inst := &instance{
+		cfg:           cfg,
+		proxies:       proxies,
+		schedules:     nil,
+		wakupCh:       make(chan struct{}, 1),
+		host:          h,
+		hostReadyCond: sync.NewCond(&sync.Mutex{}),
 	}
-	return ret, nil
+	inst.lastHostState.Store(host.State{Status: host.StatusUnknown})
+	return inst, nil
 }
 
-func ec2ReconciliationLoop() {
+func (i *instance) runProxies(ctx context.Context) error {
+	innerCtx, cancel := context.WithCancelCause(ctx)
+
+	for svcID, p := range i.proxies {
+		cb := proxy.Callbacks{
+			ConnDelta: func(delta int) {
+				// The order of operations is important here.
+				p.lastActivityTime.Store(time.Now())
+				p.activeConns.Add(int32(delta))
+			},
+			Ready: func(ctx context.Context, wait bool) (ready bool, hostName string, err error) {
+
+				// If we are ready or asked not to wait, return immediately.
+				st := i.lastHostState.Load().(host.State)
+				lastPing := p.lastPing.Load()
+				ready = lastPing && st.Status == host.StatusStarted
+				if ready || !wait {
+					return ready, st.HostName, nil
+				}
+
+				// This ensures if the context is cancelled, we stop waiting
+				// and return an error.
+				stop := context.AfterFunc(ctx, func() {
+					i.hostReadyCond.L.Lock()
+					defer i.hostReadyCond.L.Unlock()
+					i.hostReadyCond.Broadcast()
+				})
+				defer stop()
+
+				i.hostReadyCond.L.Lock()
+				defer i.hostReadyCond.L.Unlock()
+
+				for {
+					select {
+					case i.wakupCh <- struct{}{}:
+					}
+					i.hostReadyCond.Wait()
+					if ctx.Err() != nil {
+						return false, "", ctx.Err()
+					}
+					st := i.lastHostState.Load().(host.State)
+					lastPing := p.lastPing.Load()
+					ready = lastPing && st.Status == host.StatusStarted
+					if ready {
+						return true, st.HostName, nil
+					}
+				}
+
+			},
+		}
+		go cancel(p.p.Run(innerCtx, cb))
+	}
+
+	<-innerCtx.Done()
+	return context.Cause(innerCtx)
+}
+
+func (i *instance) runReconLoop(ctx context.Context) error {
+
 	const timerInterval = 5 * time.Second
 
 	var lastActivityTime atomic.Value
@@ -155,33 +215,31 @@ func ec2ReconciliationLoop() {
 	}
 }
 
-func run() error {
+func run(configPath string) error {
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	cfgInst = cfg.Instances[0]
+	instances := make(map[string]*instance, len(cfg.Instances))
+	for i, instCfg := range cfg.Instances {
+		var err error
+		instances[i], err = newInstance(instCfg)
+		if err != nil {
+			return fmt.Errorf("instance %s: %w", i, err)
+		}
 
-	ec2CurStatus.Store(ec2StatusNotReady)
-
-	ec2Client, err = getEC2Client(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to create EC2 client: %w", err)
 	}
-
-	go ec2ReconciliationLoop()
-
-	log.Printf("starting http proxy on port %d", cfgInst.Services[0].HTTP.ProxyPort)
-	http.ListenAndServe(fmt.Sprintf(":%d", cfgInst.Services[0].HTTP.ProxyPort), nil)
+	wg := sync.WaitGroup{}
+	wg.Add(len(instances))
 
 	return err
 }
 
 func main() {
 	log.SetFlags(0)
-	flag.StringVar(&configPath, "config", "zipnap.yaml", "Path to the configuration file")
+	configPath := flag.String("config", "zipnap.yaml", "Path to the configuration file")
 	flag.Parse()
-	if err := run(); err != nil {
+	if err := run(*configPath); err != nil {
 		log.Fatal(err)
 	}
 }

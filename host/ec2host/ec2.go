@@ -21,14 +21,14 @@ type EC2Host struct {
 	client *ec2.Client
 }
 
-func New(ctx context.Context, cfg config.Instance) (*EC2Host, error) {
+func New(ctx context.Context, cfg config.Instance, logger *log.Logger) (*EC2Host, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return &EC2Host{
 		cfg:    cfg,
-		logger: log.New(log.Writer(), fmt.Sprintf("ec2-host(%s): ", cfg.EC2.InstanceID), 0),
+		logger: logger,
 		client: ec2.NewFromConfig(awsCfg),
 	}, nil
 }
@@ -48,7 +48,7 @@ func (h *EC2Host) Stop(ctx context.Context) error {
 	return err
 }
 
-func (h *EC2Host) Status(ctx context.Context) (host.State, error) {
+func (h *EC2Host) State(ctx context.Context) (host.State, error) {
 	st := host.State{}
 	out, err := h.client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{h.cfg.EC2.InstanceID},
