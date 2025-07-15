@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mathspace/zipnap/config"
@@ -25,6 +27,8 @@ var (
 )
 
 type HTTPProxy struct {
+	// RunProxy should be callable multiple times on the same instance and thus
+	// no state should be kept in here, only config.
 	cfg    config.Service
 	logger *log.Logger
 }
@@ -36,43 +40,85 @@ func New(cfg config.Service, logger *log.Logger) *HTTPProxy {
 	}
 }
 
-func (p *HTTPProxy) Run(ctx context.Context, cb proxy.Callbacks) error {
+type proxyRun struct {
+	p           *HTTPProxy
+	cb          proxy.Callbacks
+	healthy     atomic.Bool
+	healthyCond *sync.Cond
+	hostName    atomic.Value
+}
 
-	// Create a handler that will wait for the service to be healthy and then
-	// proxy the request to the EC2 instance.
+func (pr *proxyRun) runHealthcheck(ctx context.Context) {
 
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		cb.ConnDelta(1)
-		defer cb.ConnDelta(-1)
-		ctx := r.Context()
+	hostReadyCh := make(chan struct{}, 1)
 
-		ready, hostName := cb.Ready(ctx, !p.cfg.HTTP.ShowWaitingPage)
+	go func() {
+		for {
+			_, hostName := pr.cb.HostReady(ctx, true)
+			pr.hostName.Store(hostName)
+			select {
+			case hostReadyCh <- struct{}{}:
+			default:
+			}
+		}
 
-		// Show waiting page if service not ready.
+	}()
 
-		if !ready && p.cfg.HTTP.ShowWaitingPage {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			waitingPageTpl.Execute(w, map[string]any{
-				"Name": p.cfg.Name,
-			})
+	timer := time.NewTicker(pr.p.cfg.HTTP.HealthCheck.Interval)
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case <-timer.C:
 		}
 
-		// Proxy the request to the EC2 instance otherwise.
-
-		u := &url.URL{
-			Scheme: "http",
-			Host:   fmt.Sprintf("%s:%d", hostName, p.cfg.HTTP.ServicePort),
-		}
-		httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 	}
+
+}
+
+func (pr *proxyRun) handleHTTP(w http.ResponseWriter, r *http.Request) {
+	pr.cb.ConnDelta(1)
+	defer pr.cb.ConnDelta(-1)
+	ctx := r.Context()
+
+	ready, hostName := pr.cb.HostReady(ctx, !pr.p.cfg.HTTP.ShowWaitingPage)
+
+	// Show waiting page if service not ready.
+
+	if !ready && pr.p.cfg.HTTP.ShowWaitingPage {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		waitingPageTpl.Execute(w, map[string]any{
+			"Name": pr.p.cfg.Name,
+		})
+		return
+	}
+
+	// Proxy the request to the EC2 instance otherwise.
+
+	u := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%d", hostName, pr.p.cfg.HTTP.ServicePort),
+	}
+	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
+}
+
+func (p *HTTPProxy) RunProxy(ctx context.Context, cb proxy.Callbacks) error {
+
+	run := &proxyRun{
+		p:           p,
+		cb:          cb,
+		healthy:     atomic.Bool{},
+		healthyCond: sync.NewCond(&sync.Mutex{}),
+	}
+	run.hostName.Store("")
+	go run.runHealthcheck(ctx)
 
 	// Setup the HTTP server with the handler.
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", p.cfg.HTTP.ProxyHost, p.cfg.HTTP.ProxyPort),
-		Handler: http.HandlerFunc(handler),
+		Handler: http.HandlerFunc(run.handleHTTP),
 	}
 
 	stopping := make(chan struct{})

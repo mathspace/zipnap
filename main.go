@@ -99,7 +99,7 @@ func (i *instance) runProxies(ctx context.Context) error {
 				p.lastActivityTime.Store(time.Now())
 				p.activeConns.Add(int32(delta))
 			},
-			Ready: func(ctx context.Context, wait bool) (ready bool, hostName string) {
+			HostReady: func(ctx context.Context, wait bool) (ready bool, hostName string) {
 
 				// If we are ready or asked not to wait, return immediately.
 				st := i.lastHostState.Load().(host.State)

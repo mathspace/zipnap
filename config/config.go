@@ -27,6 +27,12 @@ type StoreForwardRule struct {
 	Path string `yaml:"path"`
 }
 
+type HTTPHealthCheck struct {
+	Interval    time.Duration `yaml:"interval"`
+	Path        string        `yaml:"path"`
+	StatusCodes []int         `yaml:"status_codes"`
+}
+
 // HTTP represents the configuration for an HTTP service. The service is assumed
 // to be active when request sent to path / on given port returns a 2xx-3xx
 // status code.
@@ -36,6 +42,7 @@ type HTTP struct {
 	ProxyHost         string             `yaml:"proxy_host,omitempty"`
 	ShowWaitingPage   bool               `yaml:"show_waiting_page,omitempty"`
 	StoreForwardRules []StoreForwardRule `yaml:"store_forward_rules,omitempty"`
+	HealthCheck       *HTTPHealthCheck   `yaml:"health_check,omitempty"`
 }
 
 // TCP represents the configuration for a TCP service. The service is assumed to
@@ -71,8 +78,9 @@ func (st *ServiceType) UnmarshalYAML(n *yaml.Node) error {
 type Service struct {
 	Name string      `yaml:"name"`
 	Type ServiceType `yaml:"type"`
-	HTTP *HTTP       `yaml:"http,omitempty"`
-	TCP  *TCP        `yaml:"tcp,omitempty"`
+
+	HTTP *HTTP `yaml:"http,omitempty"`
+	TCP  *TCP  `yaml:"tcp,omitempty"`
 }
 
 type CronSchedule struct {
