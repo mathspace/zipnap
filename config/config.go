@@ -11,6 +11,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Duration wraps time.Duration to provide custom JSON marshalling
+type Duration struct {
+	time.Duration
+}
+
+func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
+	var s string
+	if err := n.Decode(&s); err != nil {
+		return err
+	}
+	duration, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration format: %v", err)
+	}
+	d.Duration = duration
+	return nil
+}
+
 // EC2 represents the configuration for an EC2 instance.
 type EC2 struct {
 	InstanceID string `yaml:"instance_id"`
@@ -45,6 +63,36 @@ type HTTP struct {
 	HealthCheck       *HTTPHealthCheck   `yaml:"health_check,omitempty"`
 }
 
+// Validate checks the HTTP configuration for validity.
+func (h *HTTP) Validate() error {
+	if h.ServicePort <= 0 || h.ServicePort > 65535 {
+		return fmt.Errorf("invalid service port %d, must be between 1 and 65535", h.ServicePort)
+	}
+	if h.ProxyPort <= 0 || h.ProxyPort > 65535 {
+		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", h.ProxyPort)
+	}
+	if h.HealthCheck != nil {
+		if h.HealthCheck.Path == "" {
+			return fmt.Errorf("health check path must not be empty")
+		}
+		if len(h.HealthCheck.StatusCodes) == 0 {
+			return fmt.Errorf("health check must have at least one status code")
+		}
+		if h.HealthCheck.Interval.Duration <= 0 {
+			return fmt.Errorf("health check interval must be a positive duration")
+		}
+	}
+	for _, rule := range h.StoreForwardRules {
+		if rule.Method == "" {
+			return fmt.Errorf("store forward rule method must not be empty")
+		}
+		if rule.Path == "" {
+			return fmt.Errorf("store forward rule path must not be empty")
+		}
+	}
+	return nil
+}
+
 // TCP represents the configuration for a TCP service. The service is assumed to
 // be active when a TCP connection to the service port is established
 // successfully.
@@ -54,33 +102,54 @@ type TCP struct {
 	ProxyHost   string `yaml:"proxy_host,omitempty"`
 }
 
-type ServiceType string
-
-// ServiceType represents the type of service.
-const (
-	ServiceTypeHTTP ServiceType = "http"
-	ServiceTypeTCP  ServiceType = "tcp"
-)
-
-func (st *ServiceType) UnmarshalYAML(n *yaml.Node) error {
-	var s string
-	if err := n.Decode(&s); err != nil {
-		return err
+// Validate checks the TCP configuration for validity.
+func (t *TCP) Validate() error {
+	if t.ServicePort <= 0 || t.ServicePort > 65535 {
+		return fmt.Errorf("invalid service port %d, must be between 1 and 65535", t.ServicePort)
 	}
-	*st = ServiceType(s)
-	if *st != ServiceTypeHTTP && *st != ServiceTypeTCP {
-		return fmt.Errorf("invalid service type %q, must be one of %q or %q", s, ServiceTypeHTTP, ServiceTypeTCP)
+	if t.ProxyPort <= 0 || t.ProxyPort > 65535 {
+		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", t.ProxyPort)
 	}
 	return nil
 }
 
+// ServiceType represents the type of service.
+const (
+	ServiceTypeHTTP = "http"
+	ServiceTypeTCP  = "tcp"
+)
+
 // Service represents a service that is to be proxied.
 type Service struct {
-	Name string      `yaml:"name"`
-	Type ServiceType `yaml:"type"`
+	Name string `yaml:"name"`
+	Type string `yaml:"type"`
 
 	HTTP *HTTP `yaml:"http,omitempty"`
 	TCP  *TCP  `yaml:"tcp,omitempty"`
+}
+
+func (s *Service) Validate() error {
+	if s.Name == "" {
+		return fmt.Errorf("service name must not be empty")
+	}
+	if s.Type == "" {
+		return fmt.Errorf("service type must not be empty")
+	}
+
+	switch s.Type {
+	case ServiceTypeHTTP:
+		if s.HTTP == nil {
+			return fmt.Errorf("HTTP service must have HTTP configuration")
+		}
+		return s.HTTP.Validate()
+	case ServiceTypeTCP:
+		if s.TCP == nil {
+			return fmt.Errorf("TCP service must have TCP configuration")
+		}
+		return s.TCP.Validate()
+	default:
+		return fmt.Errorf("unsupported service type %q", s.Type)
+	}
 }
 
 type CronSchedule struct {
@@ -109,24 +178,6 @@ type Schedule struct {
 	Name     string       `yaml:"name"`
 	Start    CronSchedule `yaml:"start"`
 	Duration Duration     `yaml:"duration"`
-}
-
-// Duration wraps time.Duration to provide custom JSON marshalling
-type Duration struct {
-	time.Duration
-}
-
-func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
-	var s string
-	if err := n.Decode(&s); err != nil {
-		return err
-	}
-	duration, err := time.ParseDuration(s)
-	if err != nil {
-		return fmt.Errorf("invalid duration format: %v", err)
-	}
-	d.Duration = duration
-	return nil
 }
 
 type InstanceType string
@@ -172,65 +223,7 @@ func Load(r io.Reader) (*Config, error) {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Validate the configuration
-
-	for instID, i := range config.Instances {
-		if instID == "" || i.Name == "" {
-			return nil, fmt.Errorf("instance must have a non-blank ID and a name")
-		}
-		if i.Timeout.Duration <= 0 {
-			return nil, fmt.Errorf("instance %q must have a positive timeout", instID)
-		}
-		if i.Type != InstanceTypeEC2 {
-			return nil, fmt.Errorf("instance %q has unsupported type %q", instID, i.Type)
-		}
-		if i.Type == InstanceTypeEC2 && i.EC2 == nil {
-			return nil, fmt.Errorf("instance %q of type %q must have EC2 configuration", instID, i.Type)
-		}
-		if i.EC2 != nil {
-			if i.EC2.InstanceID == "" {
-				return nil, fmt.Errorf("instance %q of type %q must have a valid instance_id", instID, i.Type)
-			}
-		}
-		for id, s := range i.Services {
-			if id == "" || s.Name == "" {
-				return nil, fmt.Errorf("service in instance %q must have a non-blank ID and a name", instID)
-			}
-			if s.Type != ServiceTypeHTTP {
-				return nil, fmt.Errorf("service %q in instance %q has unsupported type %q", id, instID, s.Type)
-			}
-			if s.Type == ServiceTypeHTTP && s.HTTP == nil {
-				return nil, fmt.Errorf("service %q in instance %q of type %q must have HTTP configuration", id, instID, s.Type)
-			}
-			if s.HTTP != nil {
-				if s.HTTP.ServicePort <= 0 || s.HTTP.ServicePort > 65535 {
-					return nil, fmt.Errorf("service %q in instance %q has invalid service http port %d", id, instID, s.HTTP.ServicePort)
-				}
-				if s.HTTP.ProxyPort <= 0 || s.HTTP.ProxyPort > 65535 {
-					return nil, fmt.Errorf("service %q in instance %q has invalid proxy http port %d", id, instID, s.HTTP.ProxyPort)
-				}
-				if s.HTTP.HealthCheck == nil {
-					s.HTTP.HealthCheck = &HTTPHealthCheck{}
-				}
-				if s.HTTP.HealthCheck.Interval.Duration == 0 {
-
-				}
-			}
-		}
-		for id, s := range i.Schedules {
-			if id == "" || s.Name == "" {
-				return nil, fmt.Errorf("schedule in instance %q must have a non-blank ID and a name", instID)
-			}
-			if s.Start.Schedule == nil {
-				return nil, fmt.Errorf("schedule %q in instance %q must have a start time", id, instID)
-			}
-			if s.Duration.Duration <= 0 {
-				return nil, fmt.Errorf("schedule %q in instance %q must have a positive duration", id, instID)
-			}
-		}
-	}
-
-	return &config, nil
+	return &config, config.Validate()
 }
 
 // LoadFile reads the configuration from a file at the specified path,
