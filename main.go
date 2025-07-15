@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -24,13 +25,14 @@ import (
 
 type instanceProxy struct {
 	p                proxy.Proxy
-	lastPing         atomic.Bool
+	ready            atomic.Bool
 	activeConns      atomic.Int32
 	lastActivityTime atomic.Value // time.Time
 	logger           *log.Logger
 }
 
 type instance struct {
+	id            string
 	cfg           config.Instance
 	proxies       map[string]*instanceProxy
 	schedules     map[string]*cron.Cron
@@ -42,6 +44,7 @@ type instance struct {
 }
 
 func newInstance(ctx context.Context, id string, cfg config.Instance) (*instance, error) {
+
 	proxies := make(map[string]*instanceProxy, len(cfg.Services))
 	for svcID, svc := range cfg.Services {
 		logger := log.New(os.Stdout, fmt.Sprintf("instance[%s] proxy[%s]: ", svcID), 0)
@@ -49,24 +52,32 @@ func newInstance(ctx context.Context, id string, cfg config.Instance) (*instance
 		switch svc.Type {
 		case config.ServiceTypeHTTP:
 			p = httpproxy.New(svc, logger)
+		case config.ServiceTypeTCP:
+			return nil, fmt.Errorf("tcp proxy not implemented yet")
 		default:
-			return nil, fmt.Errorf("unsupported service type %s for service %s", svc.Type, svcID)
+			panic("unreachable")
 		}
 		proxies[svcID] = &instanceProxy{
 			p:      p,
 			logger: logger,
 		}
 	}
-	if cfg.Type != config.InstanceTypeEC2 {
-		return nil, fmt.Errorf("unsupported instance type %s", cfg.Type)
-	}
+
 	logger := log.New(os.Stdout, fmt.Sprintf("instance[%s]: ", id), 0)
-	h, err := ec2host.New(ctx, cfg, logger)
-	if err != nil {
-		return nil, err
+	var h host.Host
+	var err error
+	switch cfg.Type {
+	case config.InstanceTypeEC2:
+		h, err = ec2host.New(ctx, cfg, logger)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		panic("unreachable")
 	}
 
 	inst := &instance{
+		id:            id,
 		cfg:           cfg,
 		proxies:       proxies,
 		schedules:     nil,
@@ -81,7 +92,7 @@ func newInstance(ctx context.Context, id string, cfg config.Instance) (*instance
 func (i *instance) runProxies(ctx context.Context) error {
 	innerCtx, cancel := context.WithCancelCause(ctx)
 
-	for svcID, p := range i.proxies {
+	for _, p := range i.proxies {
 		cb := proxy.Callbacks{
 			ConnDelta: func(delta int) {
 				// The order of operations is important here.
@@ -92,9 +103,7 @@ func (i *instance) runProxies(ctx context.Context) error {
 
 				// If we are ready or asked not to wait, return immediately.
 				st := i.lastHostState.Load().(host.State)
-				lastPing := p.lastPing.Load()
-				ready = lastPing && st.Status == host.StatusStarted
-				if ready || !wait {
+				if p.ready.Load() || !wait {
 					return ready, st.HostName
 				}
 
@@ -119,9 +128,7 @@ func (i *instance) runProxies(ctx context.Context) error {
 						return false, ""
 					}
 					st := i.lastHostState.Load().(host.State)
-					lastPing := p.lastPing.Load()
-					ready = lastPing && st.Status == host.StatusStarted
-					if ready {
+					if p.ready.Load() {
 						return true, st.HostName
 					}
 				}
@@ -135,48 +142,52 @@ func (i *instance) runProxies(ctx context.Context) error {
 	return context.Cause(innerCtx)
 }
 
-func (i *instance) runReconLoop(ctx context.Context) error {
+func (i *instance) runReconLoop(ctx context.Context) {
+
+	logger := log.New(i.logger.Writer(), fmt.Sprintf("instance[%s] recon: ", i.id), 0)
 
 	const timerInterval = 5 * time.Second
-
-	var lastActivityTime atomic.Value
-	lastActivityTime.Store(time.Now())
-	var connCount atomic.Int32
-	go func() {
-		for d := range connDeltaCh {
-			connCount.Add(int32(d))
-			lastActivityTime.Store(time.Now())
-		}
-	}()
-
 	var wakeupRequested bool
 	timer := time.NewTicker(timerInterval)
-	var ctxCancel context.CancelFunc
-	var ctx context.Context
+
 	for {
-		if ctxCancel != nil {
-			ctxCancel()
-		}
+
 		// Wait for either 5 seconds or a wakeup signal.
 		select {
+		case <-ctx.Done():
+			return
 		case <-timer.C:
-		case <-wakeupEC2Ch:
+		case <-i.wakupCh:
 			wakeupRequested = true
 		}
-		ctx, ctxCancel = context.WithTimeout(context.Background(), timerInterval-time.Second)
-		details, err := getEC2Details(ctx, cfgInst.EC2.InstanceID)
+
+		logger.Printf("waking up")
+
+		st, err := i.host.State(ctx)
 		if err != nil {
-			log.Printf("error getting EC2 instance details: %v", err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			logger.Printf("error getting host state: %v", err)
 			continue
 		}
-		ec2IPAddress.Store(details.IP)
+		i.lastHostState.Store(st)
 
-		log.Printf("ec2-recon-loop: instance %s is in state %s with IP %s, active connections: %d, last activity: %s",
-			cfgInst.EC2.InstanceID, details.State, details.IP, connCount.Load(), lastActivityTime.Load().(time.Time).Format(time.RFC3339))
+		logger.Printf("host state: %s", st.Status)
 
 		// Decision
 
-		idle := connCount.Load() == 0 && time.Since(lastActivityTime.Load().(time.Time)) > cfgInst.Timeout.Duration
+		idle := true
+		for _, p := range i.proxies {
+			if p.activeConns.Load() > 0 {
+				idle = false
+				break
+			}
+			if time.Since(p.lastActivityTime.Load().(time.Time)) <= i.cfg.Timeout.Duration {
+				idle = false
+				break
+			}
+		}
 
 		if details.State != ec2types.InstanceStateNameRunning {
 			ec2CurStatus.Store(ec2StatusNotReady)
