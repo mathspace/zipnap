@@ -10,7 +10,7 @@ type Callbacks struct {
 	// block until the host is started or the context is cancelled. If wait is
 	// false, it will return immediately with the readiness status. hostName is
 	// the host name where the service is running.
-	HostReady func(ctx context.Context, wait bool) (ready bool, hostName string)
+	HostReady func(ctx context.Context, wait bool, wakeup bool) (ready bool, hostName string)
 	// ConnDelta is a function type that is used to signal changes in the number
 	// of active connections. It takes an integer delta that indicates the change in
 	// the number of connections. A positive delta indicates an increase in

@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/oxplot/valuewaiter"
+
 	"github.com/mathspace/zipnap/config"
 	"github.com/mathspace/zipnap/proxy"
 )
@@ -41,39 +43,46 @@ func New(cfg config.Service, logger *log.Logger) *HTTPProxy {
 }
 
 type proxyRun struct {
-	p           *HTTPProxy
-	cb          proxy.Callbacks
-	healthy     atomic.Bool
-	healthyCond *sync.Cond
-	hostName    atomic.Value
+	p        *HTTPProxy
+	cb       proxy.Callbacks
+	hostName atomic.Value
+	healthy  *valuewaiter.ValueWaiter[bool]
+}
+
+func (pr *proxyRun) ping(ctx context.Context) bool {
+	u := fmt.Sprintf("http://%s:%d%s", pr.hostName, pr.p.cfg.HTTP.ServicePort, pr.p.cfg.HTTP.HealthCheck.Path)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
 }
 
 func (pr *proxyRun) runHealthcheck(ctx context.Context) {
+	for {
+		_, hostName := pr.cb.HostReady(ctx, true, false)
+		if ctx.Err() != nil {
+			return
+		}
+		pr.hostName.Store(hostName)
 
-	hostReadyCh := make(chan struct{}, 1)
+		if pr.p.cfg.HTTP.HealthCheck == nil {
 
-	go func() {
-		for {
-			_, hostName := pr.cb.HostReady(ctx, true)
-			pr.hostName.Store(hostName)
-			select {
-			case hostReadyCh <- struct{}{}:
-			default:
-			}
+		}
+		healthy := pr.ping(ctx)
+		pr.healthy.Store(healthy)
+		if healthy {
+			pr.healthyCond.Broadcast()
 		}
 
-	}()
-
-	timer := time.NewTicker(pr.p.cfg.HTTP.HealthCheck.Interval)
-	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-timer.C:
+		case <-time.NewTimer(pr.p.cfg.HTTP.HealthCheck.Interval).C:
 		}
-
 	}
-
 }
 
 func (pr *proxyRun) handleHTTP(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +90,7 @@ func (pr *proxyRun) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	defer pr.cb.ConnDelta(-1)
 	ctx := r.Context()
 
-	ready, hostName := pr.cb.HostReady(ctx, !pr.p.cfg.HTTP.ShowWaitingPage)
+	ready, hostName := pr.cb.WaitHostReady(ctx, !pr.p.cfg.HTTP.ShowWaitingPage)
 
 	// Show waiting page if service not ready.
 
@@ -150,15 +159,4 @@ func (p *HTTPProxy) RunProxy(ctx context.Context, cb proxy.Callbacks) error {
 	}
 	p.logger.Print("gracefully shut down")
 	return nil
-}
-
-func (p *HTTPProxy) Ping(ctx context.Context, hostName string) (bool, error) {
-	u := fmt.Sprintf("http://%s:%d/", hostName, p.cfg.HTTP.ServicePort)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false, nil
-	}
-	resp.Body.Close()
-	return resp.StatusCode < 500, nil
 }

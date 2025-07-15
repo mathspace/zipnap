@@ -1,6 +1,6 @@
 module github.com/mathspace/zipnap
 
-go 1.24.4
+go 1.24.5
 
 require gopkg.in/yaml.v3 v3.0.1
 
@@ -26,4 +26,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.17
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.230.0
 	github.com/aws/smithy-go v1.22.4 // indirect
+	github.com/oxplot/valuewaiter v0.1.0
 )

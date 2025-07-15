@@ -28,9 +28,9 @@ type StoreForwardRule struct {
 }
 
 type HTTPHealthCheck struct {
-	Interval    time.Duration `yaml:"interval"`
-	Path        string        `yaml:"path"`
-	StatusCodes []int         `yaml:"status_codes"`
+	Interval    Duration `yaml:"interval"`
+	Path        string   `yaml:"path"`
+	StatusCodes []int    `yaml:"status_codes"`
 }
 
 // HTTP represents the configuration for an HTTP service. The service is assumed
@@ -208,6 +208,12 @@ func Load(r io.Reader) (*Config, error) {
 				}
 				if s.HTTP.ProxyPort <= 0 || s.HTTP.ProxyPort > 65535 {
 					return nil, fmt.Errorf("service %q in instance %q has invalid proxy http port %d", id, instID, s.HTTP.ProxyPort)
+				}
+				if s.HTTP.HealthCheck == nil {
+					s.HTTP.HealthCheck = &HTTPHealthCheck{}
+				}
+				if s.HTTP.HealthCheck.Interval.Duration == 0 {
+
 				}
 			}
 		}
