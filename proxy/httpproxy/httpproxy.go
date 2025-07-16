@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -27,77 +28,89 @@ var (
 	waitingPageTpl = template.Must(template.New("").Parse(string(waitingPageBytes)))
 )
 
+// HTTPProxy implements the proxy.Proxy interface for HTTP services.
 type HTTPProxy struct {
-	// RunProxy should be callable multiple times on the same instance and thus
-	// no state should be kept in here, only config.
-	cfg    config.Service
-	logger *log.Logger
-}
-
-func New(cfg config.Service, logger *log.Logger) *HTTPProxy {
-	return &HTTPProxy{
-		cfg:    cfg,
-		logger: logger,
-	}
-}
-
-type proxyRun struct {
-	p        *HTTPProxy
+	cfg      config.Service
+	logger   *log.Logger
 	cb       proxy.Callbacks
 	hostName atomic.Value
 	healthy  *valuewaiter.ValueWaiter[bool]
 }
 
-func (pr *proxyRun) ping(ctx context.Context) bool {
-	u := fmt.Sprintf("http://%s:%d%s", pr.hostName, pr.p.cfg.HTTP.ServicePort, pr.p.cfg.HTTP.HealthCheck.Path)
+// New creates a new HTTPProxy instance with the given configuration and logger.
+func New(cfg config.Service, logger *log.Logger) *HTTPProxy {
+	p := HTTPProxy{
+		cfg:     cfg,
+		logger:  logger,
+		healthy: valuewaiter.New(false),
+	}
+	p.hostName.Store("")
+	return &p
+}
+
+// RegisterCallbacks registers the callbacks that will be used to notify the
+// proxy service about the host state and connection changes. This is called
+// before Run.
+func (p *HTTPProxy) RegisterCallbacks(cb proxy.Callbacks) {
+	p.cb = cb
+}
+
+// ping checks if the HTTP service is healthy by sending a request to the health
+// check path and verifying the response status code.
+func (p *HTTPProxy) ping(ctx context.Context) bool {
+	u := fmt.Sprintf("http://%s:%d%s", p.hostName, p.cfg.HTTP.ServicePort, p.cfg.HTTP.HealthCheck.Path)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
-	return resp.StatusCode < 500
+	return slices.Contains(p.cfg.HTTP.HealthCheck.StatusCodes, resp.StatusCode)
 }
 
-func (pr *proxyRun) runHealthcheck(ctx context.Context) {
+// runHealthcheckLoop runs a loop that periodically checks the health of the
+// HTTP service by pinging the health check endpoint. It updates the hostName
+// and healthy status in the callbacks. If the service is healthy, it broadcasts
+// the healthy condition to any waiting goroutines.
+func (p *HTTPProxy) runHealthcheckLoop(ctx context.Context) {
 	for {
-		_, hostName := pr.cb.HostReady(ctx, true, false)
+		_, hostName := p.cb.HostReady(ctx, true, false)
 		if ctx.Err() != nil {
 			return
 		}
-		pr.hostName.Store(hostName)
+		p.hostName.Store(hostName)
 
-		if pr.p.cfg.HTTP.HealthCheck == nil {
+		if p.cfg.HTTP.HealthCheck == nil {
 
 		}
-		healthy := pr.ping(ctx)
-		pr.healthy.Store(healthy)
+		healthy := p.ping(ctx)
+		p.healthy.Store(healthy)
 		if healthy {
-			pr.healthyCond.Broadcast()
+			p.healthyCond.Broadcast()
 		}
 
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.NewTimer(pr.p.cfg.HTTP.HealthCheck.Interval).C:
+		case <-time.NewTimer(p.p.cfg.HTTP.HealthCheck.Interval).C:
 		}
 	}
 }
 
-func (pr *proxyRun) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	pr.cb.ConnDelta(1)
-	defer pr.cb.ConnDelta(-1)
+func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
+	p.cb.ConnDelta(1)
+	defer p.cb.ConnDelta(-1)
 	ctx := r.Context()
 
-	ready, hostName := pr.cb.WaitHostReady(ctx, !pr.p.cfg.HTTP.ShowWaitingPage)
+	ready, hostName := p.cb.WaitHostReady(ctx, !p.p.cfg.HTTP.ShowWaitingPage)
 
 	// Show waiting page if service not ready.
 
-	if !ready && pr.p.cfg.HTTP.ShowWaitingPage {
+	if !ready && p.cfg.HTTP.ShowWaitingPage {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		waitingPageTpl.Execute(w, map[string]any{
-			"Name": pr.p.cfg.Name,
+			"Name": p.cfg.ID,
 		})
 		return
 	}
@@ -106,27 +119,20 @@ func (pr *proxyRun) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	u := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%d", hostName, pr.p.cfg.HTTP.ServicePort),
+		Host:   fmt.Sprintf("%s:%d", hostName, p.cfg.HTTP.ServicePort),
 	}
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
 
 func (p *HTTPProxy) RunProxy(ctx context.Context, cb proxy.Callbacks) error {
 
-	run := &proxyRun{
-		p:           p,
-		cb:          cb,
-		healthy:     atomic.Bool{},
-		healthyCond: sync.NewCond(&sync.Mutex{}),
-	}
-	run.hostName.Store("")
-	go run.runHealthcheck(ctx)
+	go p.runHealthcheckLoop(ctx)
 
 	// Setup the HTTP server with the handler.
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", p.cfg.HTTP.ProxyHost, p.cfg.HTTP.ProxyPort),
-		Handler: http.HandlerFunc(run.handleHTTP),
+		Handler: http.HandlerFunc(p.handleHTTP),
 	}
 
 	stopping := make(chan struct{})

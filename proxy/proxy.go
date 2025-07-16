@@ -21,8 +21,12 @@ type Callbacks struct {
 // Proxy is an interface that defines the methods required to manage a
 // proxy service.
 type Proxy interface {
-	// RunProxy starts the proxy service and blocks until context is cancelled. It
+	// RegisterCallbacks registers the callbacks that will be used to notify
+	// the proxy service about the host state and connection changes.
+	// This is called before Run.
+	RegisterCallbacks(Callbacks)
+	// Run starts the proxy service and blocks until context is cancelled. It
 	// will return nil if the service is stopped because of context cancellation
 	// and it's gracefully shutdown.
-	RunProxy(context.Context, Callbacks) error
+	Run(context.Context) error
 }
