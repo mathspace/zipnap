@@ -121,7 +121,7 @@ const (
 
 // Service represents a service that is to be proxied.
 type Service struct {
-	Name string `yaml:"name"`
+	ID   string `yaml:"-"`
 	Type string `yaml:"type"`
 
 	HTTP *HTTP `yaml:"http,omitempty"`
@@ -129,9 +129,6 @@ type Service struct {
 }
 
 func (s *Service) Validate() error {
-	if s.Name == "" {
-		return fmt.Errorf("service name must not be empty")
-	}
 	if s.Type == "" {
 		return fmt.Errorf("service type must not be empty")
 	}
@@ -175,7 +172,7 @@ func (cs *CronSchedule) UnmarshalYAML(n *yaml.Node) error {
 
 // Schedule represents a time period during which the instance should be spun up.
 type Schedule struct {
-	Name     string       `yaml:"name"`
+	ID       string       `yaml:"-"`
 	Start    CronSchedule `yaml:"start"`
 	Duration Duration     `yaml:"duration"`
 }
@@ -198,7 +195,7 @@ func (it *InstanceType) UnmarshalYAML(n *yaml.Node) error {
 
 // Instance represents a machine that runs services to be proxied.
 type Instance struct {
-	Name      string              `yaml:"name"`
+	ID        string              `yaml:"-"`
 	Type      InstanceType        `yaml:"type"`
 	EC2       *EC2                `yaml:"ec2,omitempty"`
 	Timeout   Duration            `yaml:"timeout"`
@@ -206,9 +203,77 @@ type Instance struct {
 	Schedules map[string]Schedule `yaml:"schedules,omitempty"`
 }
 
+func (i *Instance) UnmarshalYAML(n *yaml.Node) error {
+	type alias Instance
+	var a alias
+	if err := n.Decode(&a); err != nil {
+		return err
+	}
+	for id, svc := range a.Services {
+		svc.ID = id
+		a.Services[id] = svc
+	}
+	for id, sch := range a.Schedules {
+		sch.ID = id
+		a.Schedules[id] = sch
+	}
+	*i = Instance(a)
+	return nil
+}
+
+func (i *Instance) Validate() error {
+	if i.Timeout.Duration <= 0 {
+		return fmt.Errorf("timeout must be a positive duration")
+	}
+
+	switch i.Type {
+	case InstanceTypeEC2:
+		if i.EC2 == nil {
+			return fmt.Errorf("EC2 instance must have EC2 configuration")
+		}
+	default:
+		return fmt.Errorf("unsupported instance type %q", i.Type)
+	}
+
+	for svcID, svc := range i.Services {
+		if err := svc.Validate(); err != nil {
+			return fmt.Errorf("service %q: %w", svcID, err)
+		}
+	}
+
+	for schID, sch := range i.Schedules {
+		// TODO validate
+		_, _ = schID, sch
+	}
+
+	return nil
+}
+
 // Config represents the configuration for the application.
 type Config struct {
 	Instances map[string]Instance `yaml:"instances"`
+}
+
+func (c *Config) UnmarshalYAML(n *yaml.Node) error {
+	inst := make(map[string]Instance)
+	if err := n.Decode(&inst); err != nil {
+		return err
+	}
+	for id, i := range inst {
+		i.ID = id
+		inst[id] = i
+	}
+	c.Instances = inst
+	return nil
+}
+
+func (c *Config) Validate() error {
+	for id, inst := range c.Instances {
+		if err := inst.Validate(); err != nil {
+			return fmt.Errorf("instance %q: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // Load reads the configuration from the provided io.Reader, validates it

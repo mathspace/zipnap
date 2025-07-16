@@ -7,13 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/robfig/cron/v3"
 
 	"github.com/mathspace/zipnap/config"
