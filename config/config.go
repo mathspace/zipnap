@@ -113,40 +113,25 @@ func (t *TCP) Validate() error {
 	return nil
 }
 
-// ServiceType represents the type of service.
-const (
-	ServiceTypeHTTP = "http"
-	ServiceTypeTCP  = "tcp"
-)
-
 // Service represents a service that is to be proxied.
 type Service struct {
-	ID   string `yaml:"-"`
-	Type string `yaml:"type"`
+	ID string `yaml:"-"`
 
 	HTTP *HTTP `yaml:"http,omitempty"`
 	TCP  *TCP  `yaml:"tcp,omitempty"`
 }
 
 func (s *Service) Validate() error {
-	if s.Type == "" {
-		return fmt.Errorf("service type must not be empty")
-	}
-
-	switch s.Type {
-	case ServiceTypeHTTP:
-		if s.HTTP == nil {
-			return fmt.Errorf("HTTP service must have HTTP configuration")
+	typeCount := 0
+	for _, v := range []any{s.HTTP, s.TCP} {
+		if v != nil {
+			typeCount++
 		}
-		return s.HTTP.Validate()
-	case ServiceTypeTCP:
-		if s.TCP == nil {
-			return fmt.Errorf("TCP service must have TCP configuration")
-		}
-		return s.TCP.Validate()
-	default:
-		return fmt.Errorf("unsupported service type %q", s.Type)
 	}
+	if typeCount != 1 {
+		return fmt.Errorf("service must have exactly one type defined (HTTP or TCP), found %d", typeCount)
+	}
+	return nil
 }
 
 type CronSchedule struct {
@@ -177,26 +162,9 @@ type Schedule struct {
 	Duration Duration     `yaml:"duration"`
 }
 
-type InstanceType string
-
-// InstanceType represents the type of instance.
-const (
-	InstanceTypeEC2 InstanceType = "ec2"
-)
-
-func (it *InstanceType) UnmarshalYAML(n *yaml.Node) error {
-	var s string
-	if err := n.Decode(&s); err != nil {
-		return err
-	}
-	*it = InstanceType(s)
-	return nil
-}
-
 // Instance represents a machine that runs services to be proxied.
 type Instance struct {
 	ID        string              `yaml:"-"`
-	Type      InstanceType        `yaml:"type"`
 	EC2       *EC2                `yaml:"ec2,omitempty"`
 	Timeout   Duration            `yaml:"timeout"`
 	Services  map[string]Service  `yaml:"services,omitempty"`
@@ -226,13 +194,14 @@ func (i *Instance) Validate() error {
 		return fmt.Errorf("timeout must be a positive duration")
 	}
 
-	switch i.Type {
-	case InstanceTypeEC2:
-		if i.EC2 == nil {
-			return fmt.Errorf("EC2 instance must have EC2 configuration")
+	typeCount := 0
+	for _, v := range []any{i.EC2} {
+		if v != nil {
+			typeCount++
 		}
-	default:
-		return fmt.Errorf("unsupported instance type %q", i.Type)
+	}
+	if typeCount != 1 {
+		return fmt.Errorf("instance must have exactly one type defined (EC2), found %d", typeCount)
 	}
 
 	for svcID, svc := range i.Services {
