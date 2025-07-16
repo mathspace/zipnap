@@ -15,12 +15,15 @@ import (
 	"github.com/mathspace/zipnap/host"
 )
 
+// EC2Host implements the host.Host interface for managing an AWS EC2 instance.
 type EC2Host struct {
 	cfg    config.Instance
 	logger *log.Logger
 	client *ec2.Client
 }
 
+// New creates a new EC2Host instance using the provided context, configuration,
+// and logger.
 func New(ctx context.Context, cfg config.Instance, logger *log.Logger) (*EC2Host, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -33,6 +36,7 @@ func New(ctx context.Context, cfg config.Instance, logger *log.Logger) (*EC2Host
 	}, nil
 }
 
+// Start starts the EC2 instance specified in the configuration.
 func (h *EC2Host) Start(ctx context.Context) error {
 	_, err := h.client.StartInstances(ctx, &ec2.StartInstancesInput{
 		InstanceIds: []string{h.cfg.EC2.InstanceID},
@@ -40,6 +44,8 @@ func (h *EC2Host) Start(ctx context.Context) error {
 	return err
 }
 
+// Stop stops the EC2 instance specified in the configuration, with hibernation
+// enabled (if available).
 func (h *EC2Host) Stop(ctx context.Context) error {
 	_, err := h.client.StopInstances(ctx, &ec2.StopInstancesInput{
 		InstanceIds: []string{h.cfg.EC2.InstanceID},
@@ -48,6 +54,8 @@ func (h *EC2Host) Stop(ctx context.Context) error {
 	return err
 }
 
+// State retrieves the current state of the EC2 instance specified in the
+// configuration.
 func (h *EC2Host) State(ctx context.Context) (host.State, error) {
 	st := host.State{}
 	out, err := h.client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
