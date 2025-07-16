@@ -6,11 +6,11 @@ import (
 )
 
 type Callbacks struct {
-	// HostReady indicates whether the host is started. If wait is true, it will
-	// block until the host is started or the context is cancelled. If wait is
-	// false, it will return immediately with the readiness status. hostName is
-	// the host name where the service is running.
-	HostReady func(ctx context.Context, wait bool, wakeup bool) (ready bool, hostName string)
+	// Healthy is a function type that is used to check the combined health of
+	// the host and the service. If wait is true, it will block until it returns
+	// either ready==true or context is cancelled. If wakeup is true, it will
+	// wake up the host if it is not ready.
+	Healthy func(ctx context.Context, wait bool, wakeup bool) (ready bool, hostName string, err error)
 	// ConnDelta is a function type that is used to signal changes in the number
 	// of active connections. It takes an integer delta that indicates the change in
 	// the number of connections. A positive delta indicates an increase in
@@ -29,4 +29,8 @@ type Proxy interface {
 	// will return nil if the service is stopped because of context cancellation
 	// and it's gracefully shutdown.
 	Run(context.Context) error
+	// HealthCheck performs a health check on the service. It returns true if
+	// the service is healthy, false otherwise. If an error occurs during the
+	// health check, it returns false and the error.
+	HealthCheck(ctx context.Context, hostName string) (healthy bool, err error)
 }

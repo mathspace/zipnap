@@ -12,10 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"slices"
-	"sync/atomic"
 	"time"
-
-	"github.com/oxplot/valuewaiter"
 
 	"github.com/mathspace/zipnap/config"
 	"github.com/mathspace/zipnap/proxy"
@@ -30,22 +27,17 @@ var (
 
 // HTTPProxy implements the proxy.Proxy interface for HTTP services.
 type HTTPProxy struct {
-	cfg      config.Service
-	logger   *log.Logger
-	cb       proxy.Callbacks
-	hostName atomic.Value
-	healthy  *valuewaiter.ValueWaiter[bool]
+	cfg    config.Service
+	logger *log.Logger
+	cb     proxy.Callbacks
 }
 
 // New creates a new HTTPProxy instance with the given configuration and logger.
 func New(cfg config.Service, logger *log.Logger) *HTTPProxy {
-	p := HTTPProxy{
-		cfg:     cfg,
-		logger:  logger,
-		healthy: valuewaiter.New(false),
+	return &HTTPProxy{
+		cfg:    cfg,
+		logger: logger,
 	}
-	p.hostName.Store("")
-	return &p
 }
 
 // RegisterCallbacks registers the callbacks that will be used to notify the
@@ -55,58 +47,39 @@ func (p *HTTPProxy) RegisterCallbacks(cb proxy.Callbacks) {
 	p.cb = cb
 }
 
-// ping checks if the HTTP service is healthy by sending a request to the health
-// check path and verifying the response status code.
-func (p *HTTPProxy) ping(ctx context.Context) bool {
-	u := fmt.Sprintf("http://%s:%d%s", p.hostName, p.cfg.HTTP.ServicePort, p.cfg.HTTP.HealthCheck.Path)
+// HealthCheck performs a health check on the service. It returns true if the
+// service is healthy, false otherwise. If an error occurs during the health
+// check, it returns false and the error. The health check is performed by
+// sending a request to the health check path configured in the service.
+func (p *HTTPProxy) HealthCheck(ctx context.Context, hostName string) (healthy bool, err error) {
+	if p.cfg.HTTP.HealthCheck == nil {
+		return true, nil // No health check configured, assume healthy.
+	}
+	u := fmt.Sprintf("http://%s:%d%s", hostName, p.cfg.HTTP.ServicePort, p.cfg.HTTP.HealthCheck.Path)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false
+		return false, err
 	}
 	resp.Body.Close()
-	return slices.Contains(p.cfg.HTTP.HealthCheck.StatusCodes, resp.StatusCode)
+	return slices.Contains(p.cfg.HTTP.HealthCheck.StatusCodes, resp.StatusCode), nil
 }
 
-// runHealthcheckLoop runs a loop that periodically checks the health of the
-// HTTP service by pinging the health check endpoint. It updates the hostName
-// and healthy status in the callbacks. If the service is healthy, it broadcasts
-// the healthy condition to any waiting goroutines.
-func (p *HTTPProxy) runHealthcheckLoop(ctx context.Context) {
-	for {
-		_, hostName := p.cb.HostReady(ctx, true, false)
-		if ctx.Err() != nil {
-			return
-		}
-		p.hostName.Store(hostName)
-
-		if p.cfg.HTTP.HealthCheck == nil {
-
-		}
-		healthy := p.ping(ctx)
-		p.healthy.Store(healthy)
-		if healthy {
-			p.healthyCond.Broadcast()
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.NewTimer(p.p.cfg.HTTP.HealthCheck.Interval).C:
-		}
-	}
-}
-
+// handleHTTP is the HTTP handler that processes incoming requests.
 func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	p.cb.ConnDelta(1)
 	defer p.cb.ConnDelta(-1)
 	ctx := r.Context()
 
-	ready, hostName := p.cb.WaitHostReady(ctx, !p.p.cfg.HTTP.ShowWaitingPage)
+	healthy, hostName, err := p.cb.Healthy(ctx, !p.cfg.HTTP.ShowWaitingPage, true)
+	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return
+	}
 
-	// Show waiting page if service not ready.
+	// Show waiting page if health check errored, or if the service is not
+	// healthy and the waiting page is enabled in the configuration.
 
-	if !ready && p.cfg.HTTP.ShowWaitingPage {
+	if err != nil || (!healthy && p.cfg.HTTP.ShowWaitingPage) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		waitingPageTpl.Execute(w, map[string]any{
@@ -115,7 +88,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Proxy the request to the EC2 instance otherwise.
+	// Proxy the request to the host instance otherwise.
 
 	u := &url.URL{
 		Scheme: "http",
@@ -124,44 +97,36 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
 
+// RunProxy starts the HTTP proxy server and blocks until the context is
+// cancelled or an error occurs.
 func (p *HTTPProxy) RunProxy(ctx context.Context, cb proxy.Callbacks) error {
-
-	go p.runHealthcheckLoop(ctx)
-
-	// Setup the HTTP server with the handler.
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", p.cfg.HTTP.ProxyHost, p.cfg.HTTP.ProxyPort),
 		Handler: http.HandlerFunc(p.handleHTTP),
 	}
 
-	stopping := make(chan struct{})
-	errCh := make(chan error, 2)
-
-	go func() {
-		select {
-		case <-ctx.Done():
-		// Provided context may never be cancelled but if the server doesn't
-		// start successfully, we still want this goroutine to exit.
-		case <-stopping:
-		}
-		p.logger.Print("shutting down ...")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		errCh <- server.Shutdown(shutdownCtx)
-	}()
+	ctx, cancel := context.WithCancelCause(ctx)
 
 	go func() {
 		p.logger.Print("starting ...")
-		errCh <- server.ListenAndServe()
-		close(stopping)
+		cancel(server.ListenAndServe())
 	}()
 
-	for range 2 {
-		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
+	<-ctx.Done()
+	cause := context.Cause(ctx)
+	if ctx.Err() != cause {
+		// If we are here, it means cancel() was called above *before* we
+		// started shutting down the server. This indicates an error
+		// condition, so we return the error from the context.
+		return cause
 	}
-	p.logger.Print("gracefully shut down")
-	return nil
+
+	p.logger.Print("shutting down ...")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("failed to shutdown server gracefully: %w", err)
+	}
+	return cause
 }
