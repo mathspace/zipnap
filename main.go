@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -43,8 +44,8 @@ type instance struct {
 
 func newInstance(ctx context.Context, id string, cfg config.Instance) (*instance, error) {
 
-	proxies := make(map[string]*instanceProxy, len(cfg.Services))
-	for svcID, svc := range cfg.Services {
+	proxies := make(map[string]*instanceProxy, len(cfg.Activators))
+	for svcID, svc := range cfg.Activators {
 		logger := log.New(os.Stdout, fmt.Sprintf("instance[%s] proxy[%s]: ", svcID), 0)
 		var p proxy.Proxy
 		switch svc.Type {

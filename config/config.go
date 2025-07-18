@@ -51,11 +51,9 @@ type HTTPHealthCheck struct {
 	StatusCodes []int    `yaml:"status_codes"`
 }
 
-// HTTP represents the configuration for an HTTP service. The service is assumed
-// to be active when request sent to path / on given port returns a 2xx-3xx
-// status code.
-type HTTP struct {
-	ServicePort       int                `yaml:"service_port"`
+// HTTPProxy represents the configuration for an HTTPProxy proxy activator.
+type HTTPProxy struct {
+	HostPort          int                `yaml:"host_port"`
 	ProxyPort         int                `yaml:"proxy_port"`
 	ProxyHost         string             `yaml:"proxy_host,omitempty"`
 	ShowWaitingPage   bool               `yaml:"show_waiting_page,omitempty"`
@@ -64,9 +62,9 @@ type HTTP struct {
 }
 
 // Validate checks the HTTP configuration for validity.
-func (h *HTTP) Validate() error {
-	if h.ServicePort <= 0 || h.ServicePort > 65535 {
-		return fmt.Errorf("invalid service port %d, must be between 1 and 65535", h.ServicePort)
+func (h *HTTPProxy) Validate() error {
+	if h.HostPort <= 0 || h.HostPort > 65535 {
+		return fmt.Errorf("invalid host port %d, must be between 1 and 65535", h.HostPort)
 	}
 	if h.ProxyPort <= 0 || h.ProxyPort > 65535 {
 		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", h.ProxyPort)
@@ -93,19 +91,17 @@ func (h *HTTP) Validate() error {
 	return nil
 }
 
-// TCP represents the configuration for a TCP service. The service is assumed to
-// be active when a TCP connection to the service port is established
-// successfully.
-type TCP struct {
-	ServicePort int    `yaml:"service_port"`
-	ProxyPort   int    `yaml:"proxy_port"`
-	ProxyHost   string `yaml:"proxy_host,omitempty"`
+// TCPProxy represents the configuration for a TCPProxy proxy activator.
+type TCPProxy struct {
+	HostPort  int    `yaml:"host_port"`
+	ProxyPort int    `yaml:"proxy_port"`
+	ProxyHost string `yaml:"proxy_host,omitempty"`
 }
 
 // Validate checks the TCP configuration for validity.
-func (t *TCP) Validate() error {
-	if t.ServicePort <= 0 || t.ServicePort > 65535 {
-		return fmt.Errorf("invalid service port %d, must be between 1 and 65535", t.ServicePort)
+func (t *TCPProxy) Validate() error {
+	if t.HostPort <= 0 || t.HostPort > 65535 {
+		return fmt.Errorf("invalid host port %d, must be between 1 and 65535", t.HostPort)
 	}
 	if t.ProxyPort <= 0 || t.ProxyPort > 65535 {
 		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", t.ProxyPort)
@@ -113,23 +109,23 @@ func (t *TCP) Validate() error {
 	return nil
 }
 
-// Service represents a service that is to be proxied.
-type Service struct {
+// Activator represents a host activator that can wake up a host.
+type Activator struct {
 	ID string `yaml:"-"`
 
-	HTTP *HTTP `yaml:"http,omitempty"`
-	TCP  *TCP  `yaml:"tcp,omitempty"`
+	HTTPProxy *HTTPProxy `yaml:"http,omitempty"`
+	TCPProxy  *TCPProxy  `yaml:"tcp,omitempty"`
 }
 
-func (s *Service) Validate() error {
+func (s *Activator) Validate() error {
 	typeCount := 0
-	for _, v := range []any{s.HTTP, s.TCP} {
+	for _, v := range []any{s.HTTPProxy, s.TCPProxy} {
 		if v != nil {
 			typeCount++
 		}
 	}
 	if typeCount != 1 {
-		return fmt.Errorf("service must have exactly one type defined (HTTP or TCP), found %d", typeCount)
+		return fmt.Errorf("activator must have exactly one type defined (HTTP or TCP), found %d", typeCount)
 	}
 	return nil
 }
@@ -155,20 +151,12 @@ func (cs *CronSchedule) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// Schedule represents a time period during which the instance should be spun up.
-type Schedule struct {
-	ID       string       `yaml:"-"`
-	Start    CronSchedule `yaml:"start"`
-	Duration Duration     `yaml:"duration"`
-}
-
-// Instance represents a machine that runs services to be proxied.
+// Instance represents a machine.
 type Instance struct {
-	ID        string              `yaml:"-"`
-	EC2       *EC2                `yaml:"ec2,omitempty"`
-	Timeout   Duration            `yaml:"timeout"`
-	Services  map[string]Service  `yaml:"services,omitempty"`
-	Schedules map[string]Schedule `yaml:"schedules,omitempty"`
+	ID         string               `yaml:"-"`
+	EC2        *EC2                 `yaml:"ec2,omitempty"`
+	Timeout    Duration             `yaml:"timeout"`
+	Activators map[string]Activator `yaml:"activators,omitempty"`
 }
 
 func (i *Instance) UnmarshalYAML(n *yaml.Node) error {
@@ -177,13 +165,9 @@ func (i *Instance) UnmarshalYAML(n *yaml.Node) error {
 	if err := n.Decode(&a); err != nil {
 		return err
 	}
-	for id, svc := range a.Services {
+	for id, svc := range a.Activators {
 		svc.ID = id
-		a.Services[id] = svc
-	}
-	for id, sch := range a.Schedules {
-		sch.ID = id
-		a.Schedules[id] = sch
+		a.Activators[id] = svc
 	}
 	*i = Instance(a)
 	return nil
@@ -204,15 +188,10 @@ func (i *Instance) Validate() error {
 		return fmt.Errorf("instance must have exactly one type defined (EC2), found %d", typeCount)
 	}
 
-	for svcID, svc := range i.Services {
+	for svcID, svc := range i.Activators {
 		if err := svc.Validate(); err != nil {
-			return fmt.Errorf("service %q: %w", svcID, err)
+			return fmt.Errorf("activator %q: %w", svcID, err)
 		}
-	}
-
-	for schID, sch := range i.Schedules {
-		// TODO validate
-		_, _ = schID, sch
 	}
 
 	return nil

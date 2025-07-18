@@ -14,8 +14,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/mathspace/zipnap/activator"
 	"github.com/mathspace/zipnap/config"
-	"github.com/mathspace/zipnap/proxy"
 )
 
 var (
@@ -27,13 +27,13 @@ var (
 
 // HTTPProxy implements the proxy.Proxy interface for HTTP services.
 type HTTPProxy struct {
-	cfg    config.Service
+	cfg    config.Activator
 	logger *log.Logger
-	cb     proxy.Callbacks
+	cb     activator.Callbacks
 }
 
 // New creates a new HTTPProxy instance with the given configuration and logger.
-func New(cfg config.Service, logger *log.Logger) *HTTPProxy {
+func New(cfg config.Activator, logger *log.Logger) *HTTPProxy {
 	return &HTTPProxy{
 		cfg:    cfg,
 		logger: logger,
@@ -52,17 +52,17 @@ func (p *HTTPProxy) RegisterCallbacks(cb proxy.Callbacks) {
 // check, it returns false and the error. The health check is performed by
 // sending a request to the health check path configured in the service.
 func (p *HTTPProxy) HealthCheck(ctx context.Context, hostName string) (healthy bool, err error) {
-	if p.cfg.HTTP.HealthCheck == nil {
+	if p.cfg.HTTPProxy.HealthCheck == nil {
 		return true, nil // No health check configured, assume healthy.
 	}
-	u := fmt.Sprintf("http://%s:%d%s", hostName, p.cfg.HTTP.ServicePort, p.cfg.HTTP.HealthCheck.Path)
+	u := fmt.Sprintf("http://%s:%d%s", hostName, p.cfg.HTTPProxy.HostPort, p.cfg.HTTPProxy.HealthCheck.Path)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false, err
 	}
 	resp.Body.Close()
-	return slices.Contains(p.cfg.HTTP.HealthCheck.StatusCodes, resp.StatusCode), nil
+	return slices.Contains(p.cfg.HTTPProxy.HealthCheck.StatusCodes, resp.StatusCode), nil
 }
 
 // handleHTTP is the HTTP handler that processes incoming requests.
@@ -71,7 +71,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	defer p.cb.ConnDelta(-1)
 	ctx := r.Context()
 
-	healthy, hostName, err := p.cb.Healthy(ctx, !p.cfg.HTTP.ShowWaitingPage, true)
+	healthy, hostName, err := p.cb.Healthy(ctx, !p.cfg.HTTPProxy.ShowWaitingPage, true)
 	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return
 	}
@@ -79,7 +79,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Show waiting page if health check errored, or if the service is not
 	// healthy and the waiting page is enabled in the configuration.
 
-	if err != nil || (!healthy && p.cfg.HTTP.ShowWaitingPage) {
+	if err != nil || (!healthy && p.cfg.HTTPProxy.ShowWaitingPage) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		waitingPageTpl.Execute(w, map[string]any{
@@ -92,7 +92,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	u := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%d", hostName, p.cfg.HTTP.ServicePort),
+		Host:   fmt.Sprintf("%s:%d", hostName, p.cfg.HTTPProxy.HostPort),
 	}
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
@@ -102,7 +102,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *HTTPProxy) RunProxy(ctx context.Context, cb proxy.Callbacks) error {
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", p.cfg.HTTP.ProxyHost, p.cfg.HTTP.ProxyPort),
+		Addr:    fmt.Sprintf("%s:%d", p.cfg.HTTPProxy.ProxyHost, p.cfg.HTTPProxy.ProxyPort),
 		Handler: http.HandlerFunc(p.handleHTTP),
 	}
 
