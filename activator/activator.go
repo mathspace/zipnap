@@ -7,13 +7,20 @@ import (
 
 type Callbacks struct {
 	// AcquireWakeLock is called to acquire a wake lock. It will block until the
-	// host is awake. While the lock is held, the host will not go to sleep. The
-	// returned function must be called to release the lock. The host will not
-	// necessarily to to sleep immediately after the lock is released.
+	// host is awake. If the host is not awake, it was awoken. While the lock is
+	// held, the host will not go to sleep. The returned function must be called
+	// to release the lock. The host will not necessarily to to sleep
+	// immediately after the lock is released.
+	//
+	// If the lock can be acquired immediately, cancellation of the context will
+	// not have any effect. If the context is cancelled, the function will
+	// return the context error.
 	AcquireWakeLock func(ctx context.Context) (release func(), err error)
 	// IsAwake is called to check if the host is awake. It does not block.
 	IsAwake func() bool
-	// HostName is called to get the name of the host. It does not block.
+	// HostName is called to get the name of the host. The value is not
+	// guaranteed to be valid if a wake lock is not held. It may return an empty
+	// string if the host is not awake or host name is unknown.
 	HostName func() string
 }
 
