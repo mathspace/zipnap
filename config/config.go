@@ -53,12 +53,12 @@ type HTTPHealthCheck struct {
 
 // HTTPProxy represents the configuration for an HTTPProxy proxy activator.
 type HTTPProxy struct {
-	HostPort          int                `yaml:"host_port"`
-	ProxyPort         int                `yaml:"proxy_port"`
-	ProxyHost         string             `yaml:"proxy_host,omitempty"`
-	ShowWaitingPage   bool               `yaml:"show_waiting_page,omitempty"`
-	StoreForwardRules []StoreForwardRule `yaml:"store_forward_rules,omitempty"`
-	HealthCheck       *HTTPHealthCheck   `yaml:"health_check,omitempty"`
+	HostPort             int                `yaml:"host_port"`
+	ProxyPort            int                `yaml:"proxy_port"`
+	ProxyHost            string             `yaml:"proxy_host,omitempty"`
+	StoreForwardRules    []StoreForwardRule `yaml:"store_forward_rules,omitempty"`
+	ShowWaitingPageAfter Duration           `yaml:"show_waiting_page_after,omitempty"`
+	HealthCheck          *HTTPHealthCheck   `yaml:"health_check,omitempty"`
 }
 
 // Validate checks the HTTP configuration for validity.
@@ -87,6 +87,9 @@ func (h *HTTPProxy) Validate() error {
 		if rule.Path == "" {
 			return fmt.Errorf("store forward rule path must not be empty")
 		}
+	}
+	if h.ShowWaitingPageAfter.Duration < 0 {
+		return fmt.Errorf("show waiting page after must be a non-negative duration")
 	}
 	return nil
 }
