@@ -114,10 +114,8 @@ func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
 
 // waitAndRunOnHealthy waits until the host is healthy and then runs the
 // provided function. It blocks until the host is healthy or the context is
-// done. If the context is done before the host is healthy, it returns the
-// context error. The host is kept awake during the wait and while fn is
-// running.
-func (p *HTTPProxy) waitAndRunOnHealthy(ctx context.Context, fn func() error) error {
+// done (no other errors are returned).
+func (p *HTTPProxy) waitHealthy(ctx context.Context) error {
 	// Hold the healthyCond lock before registering AfterFunc to prevent
 	// missing signals if the context is cancelled between checking healthy
 	// status and waiting on the condition variable indefinitely.
@@ -137,7 +135,7 @@ func (p *HTTPProxy) waitAndRunOnHealthy(ctx context.Context, fn func() error) er
 		}
 		p.healthyCond.Wait()
 	}
-	return fn()
+	return nil
 }
 
 // serveWaitingPage serves a waiting page to the client. It is used when the
