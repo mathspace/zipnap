@@ -63,11 +63,11 @@ func (p *HTTPProxy) RegisterCallbacks(cb activator.Callbacks) {
 //
 // A wake lock must be held before calling this function, as it will
 // perform a network request to the host.
-func (p *HTTPProxy) pingHealth(ctx context.Context) (healthy bool, err error) {
+func (p *HTTPProxy) pingHealth(ctx context.Context, hostName string) (healthy bool, err error) {
 	if p.cfg.HTTPProxy.HealthCheck == nil {
 		return true, nil // No health check configured, assume healthy if host is up.
 	}
-	u := fmt.Sprintf("http://%s:%d%s", p.cb.HostName(), p.cfg.HTTPProxy.HostPort, p.cfg.HTTPProxy.HealthCheck.Path)
+	u := fmt.Sprintf("http://%s:%d%s", hostName, p.cfg.HTTPProxy.HostPort, p.cfg.HTTPProxy.HealthCheck.Path)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -77,52 +77,37 @@ func (p *HTTPProxy) pingHealth(ctx context.Context) (healthy bool, err error) {
 	return slices.Contains(p.cfg.HTTPProxy.HealthCheck.StatusCodes, resp.StatusCode), nil
 }
 
-// runHealthChecker periodically checks host health and triggers wake/hold as
-// needed.
+// runHealthChecker starts a goroutine that periodically checks the health of
+// the host by pinging the health check endpoint. It waits for the host to wake up
+// before performing the health check.
 func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
-
-	hc := func(ctx context.Context, wake bool) {
-		var release func()
-		var err error
-		wakeCtx := ctx
-		if !wake {
-			// If not waking, use cancelled context to avoid waiting.
-			var cancel context.CancelFunc
-			wakeCtx, cancel = context.WithCancel(wakeCtx)
-			cancel()
-		}
-		release, err = p.cb.AcquireWakeLock(wakeCtx)
-		if err != nil {
-			p.healthy.Store(false)
-			return
-		}
-		defer release()
-
-		healthy, err := p.pingHealth(ctx)
-		if err != nil {
-			p.healthy.Store(false)
-			return
-		}
-		p.healthy.Store(healthy)
-		if healthy {
-			p.healthyCond.Broadcast()
-		}
-	}
-
-	ticker := time.NewTicker(p.cfg.HTTPProxy.HealthCheck.Interval.Duration)
-
 	for {
+		// Wait to acquire a wake lock before starting the health check.
+		unlock, hostName, err := p.cb.WakeLock(ctx, false)
+		if err != nil {
+			// The only way for err to be non-nil here is if main ctx
+			// is done, which means we should stop the health checker.
+			return
+		}
+		timer := time.NewTimer(p.cfg.HTTPProxy.HealthCheck.Interval.Duration)
+		func() {
+			defer unlock()
+			ctx, cancel := context.WithTimeout(ctx, p.cfg.HTTPProxy.HealthCheck.Interval.Duration-time.Millisecond*100)
+			defer cancel()
+			healthy, err := p.pingHealth(ctx, hostName)
+			if err != nil {
+				p.healthy.Store(false)
+				return
+			}
+			p.healthy.Store(healthy)
+			if healthy {
+				p.healthyCond.Broadcast()
+			}
+		}()
 		select {
 		case <-ctx.Done():
 			return
-		case <-p.healthCheckCh:
-			p.logger.Printf("performing immediate health check for %s", p.cfg.ID)
-			hc(ctx, true)
-		case <-ticker.C:
-			p.logger.Printf("performing periodic health check for %s", p.cfg.ID)
-			ctx, cancel := context.WithTimeout(ctx, p.cfg.HTTPProxy.HealthCheck.Interval.Duration-time.Second)
-			hc(ctx, false)
-			cancel()
+		case <-timer.C:
 		}
 	}
 }
@@ -149,10 +134,6 @@ func (p *HTTPProxy) waitAndRunOnHealthy(ctx context.Context, fn func() error) er
 	for !p.healthy.Load() {
 		if ctx.Err() != nil {
 			return ctx.Err()
-		}
-		select {
-		case p.healthCheckCh <- struct{}{}:
-		default:
 		}
 		p.healthyCond.Wait()
 	}
