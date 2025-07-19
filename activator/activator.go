@@ -13,14 +13,14 @@ type Callbacks struct {
 	// immediately after the lock is released.
 	//
 	// If the lock can be acquired immediately, cancellation of the context will
-	// not have any effect. If the context is cancelled, the function will
-	// return the context error.
+	// not return an error. It's therefore possible to "attempt" to acquire a
+	// lock by passing an already cancelled context.
 	AcquireWakeLock func(ctx context.Context) (release func(), err error)
-	// IsAwake is called to check if the host is awake. It does not block.
+	// IsAwake returns true if the host is awake. It does not block.
 	IsAwake func() bool
-	// HostName is called to get the name of the host. The value is not
-	// guaranteed to be valid if a wake lock is not held. It may return an empty
-	// string if the host is not awake or host name is unknown.
+	// HostName returns the host name of the host. It is not guaranteed to be
+	// valid if a wake lock is not held. It may return an empty string if the
+	// host is not awake or host name is unknown.
 	HostName func() string
 }
 
