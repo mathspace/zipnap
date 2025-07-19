@@ -5,17 +5,21 @@ import (
 	"context"
 )
 
+// WakeLocker defines a function that acquires a wake lock. It will block until the
+// target is awake. If the target is not awake, it is awoken. While the lock is
+// held, the target is not allowed go to sleep (it is not guaranteed that target
+// will be available in the entire time the lock is held). The returned function
+// must be called to release the lock. The target will not necessarily sleep
+// immediately after the lock is released.
+//
+// If the lock can be acquired immediately, cancellation of the context will
+// not return an error. It's therefore possible to "attempt" to acquire a
+// lock by passing an already cancelled context.
+type WakeLocker func(ctx context.Context) (release func(), err error)
+
 type Callbacks struct {
-	// AcquireWakeLock is called to acquire a wake lock. It will block until the
-	// host is awake. If the host is not awake, it was awoken. While the lock is
-	// held, the host will not go to sleep. The returned function must be called
-	// to release the lock. The host will not necessarily to to sleep
-	// immediately after the lock is released.
-	//
-	// If the lock can be acquired immediately, cancellation of the context will
-	// not return an error. It's therefore possible to "attempt" to acquire a
-	// lock by passing an already cancelled context.
-	AcquireWakeLock func(ctx context.Context) (release func(), err error)
+	// AcquireWakeLock acquires a wake lock on the host.
+	AcquireWakeLock WakeLocker
 	// IsAwake returns true if the host is awake. It does not block.
 	IsAwake func() bool
 	// HostName returns the host name of the host. It is not guaranteed to be

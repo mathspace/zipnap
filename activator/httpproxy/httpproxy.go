@@ -1,4 +1,3 @@
-// Package httpproxy provides a HTTP proxy implementation for a service.
 package httpproxy
 
 import (
@@ -18,39 +17,98 @@ import (
 	"github.com/mathspace/zipnap/config"
 )
 
+const (
+	// Duration to hold the host awake after the last wake trigger.
+	wakeAndHoldTimeout = 20 * time.Second
+)
+
 var (
 	//go:embed waiting.html
 	waitingPageBytes []byte
-
-	waitingPageTpl = template.Must(template.New("").Parse(string(waitingPageBytes)))
+	waitingPageTpl   = template.Must(template.New("").Parse(string(waitingPageBytes)))
 )
 
-// HTTPProxy implements the proxy.Proxy interface for HTTP services.
+// HTTPProxy is a HTTP proxy activator that upon receiving a request, wakes up
+// the host and proxies the request to it.
 type HTTPProxy struct {
 	cfg    config.Activator
 	logger *log.Logger
 	cb     activator.Callbacks
+
+	healthCheckCh chan struct{}
+	wakeAndHoldCh chan struct{}
 }
 
-// New creates a new HTTPProxy instance with the given configuration and logger.
 func New(cfg config.Activator, logger *log.Logger) *HTTPProxy {
 	return &HTTPProxy{
 		cfg:    cfg,
 		logger: logger,
+
+		healthCheckCh: make(chan struct{}, 1),
+		wakeAndHoldCh: make(chan struct{}, 1),
 	}
 }
 
-// RegisterCallbacks registers the callbacks that will be used to notify the
-// proxy service about the host state and connection changes. This is called
-// before Run.
-func (p *HTTPProxy) RegisterCallbacks(cb proxy.Callbacks) {
+func (p *HTTPProxy) RegisterCallbacks(cb activator.Callbacks) {
 	p.cb = cb
 }
 
-// HealthCheck performs a health check on the service. It returns true if the
-// service is healthy, false otherwise. If an error occurs during the health
-// check, it returns false and the error. The health check is performed by
-// sending a request to the health check path configured in the service.
+func (p *HTTPProxy) triggerHealthCheck(ctx context.Context) error {
+
+}
+
+func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
+
+}
+
+// triggerWakeAndHold triggers the wake and hold mechanism. It sends a signal to
+// the wake and hold channel, which will wake up the host and hold it awake for
+// a short period of time after the last trigger is received.
+func (p *HTTPProxy) triggerWakeAndHold() {
+	select {
+	case p.wakeAndHoldCh <- struct{}{}:
+	default:
+		// If the channel is full, it means we are already waiting to wake and hold.
+	}
+}
+
+// runWakeAndHold starts a goroutine that will wake up the host and hold it
+// awake for a short period of time after the last trigger is received.
+func (p *HTTPProxy) runWakeAndHold(ctx context.Context) {
+	timer := time.NewTimer(0)
+	timer.Stop()
+	var release func()
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			timer.Stop()
+			if release != nil {
+				release()
+			}
+			return
+
+		case <-p.wakeAndHoldCh:
+			if release == nil {
+				var err error
+				release, err = p.cb.AcquireWakeLock(ctx)
+				if err != nil {
+					continue
+				}
+			}
+			timer.Reset(wakeAndHoldTimeout)
+
+		case <-timer.C:
+			if release != nil {
+				release()
+				release = nil
+			}
+
+		}
+	}
+}
+
 func (p *HTTPProxy) HealthCheck(ctx context.Context, hostName string) (healthy bool, err error) {
 	if p.cfg.HTTPProxy.HealthCheck == nil {
 		return true, nil // No health check configured, assume healthy.
@@ -67,9 +125,13 @@ func (p *HTTPProxy) HealthCheck(ctx context.Context, hostName string) (healthy b
 
 // handleHTTP is the HTTP handler that processes incoming requests.
 func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	p.cb.ConnDelta(1)
-	defer p.cb.ConnDelta(-1)
-	ctx := r.Context()
+	ctx, cancel := context.WithCancelCause(r.Context())
+	if p.cfg.HTTPProxy.ShowWaitingPage {
+		// If we are showing the waiting page, we don't want to block waiting
+		// for the host and health check to complete.
+		cancel()
+	}
+	release, err := p.cb.AcquireWakeLock(ctx)
 
 	healthy, hostName, err := p.cb.Healthy(ctx, !p.cfg.HTTPProxy.ShowWaitingPage, true)
 	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
@@ -99,7 +161,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 // RunProxy starts the HTTP proxy server and blocks until the context is
 // cancelled or an error occurs.
-func (p *HTTPProxy) RunProxy(ctx context.Context, cb proxy.Callbacks) error {
+func (p *HTTPProxy) Run(ctx context.Context) error {
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", p.cfg.HTTPProxy.ProxyHost, p.cfg.HTTPProxy.ProxyPort),
