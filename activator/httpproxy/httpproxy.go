@@ -92,7 +92,7 @@ func (p *HTTPProxy) runWakeAndHold(ctx context.Context) {
 		case <-p.wakeAndHoldCh:
 			if release == nil {
 				var err error
-				release, err = p.cb.AcquireWakeLock(ctx)
+				release, err = p.cb.WakeLockContext(ctx)
 				if err != nil {
 					continue
 				}
@@ -123,38 +123,65 @@ func (p *HTTPProxy) HealthCheck(ctx context.Context, hostName string) (healthy b
 	return slices.Contains(p.cfg.HTTPProxy.HealthCheck.StatusCodes, resp.StatusCode), nil
 }
 
+func (p *HTTPProxy) serveWaitingPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	waitingPageTpl.Execute(w, map[string]any{
+		"Name": p.cfg.ID,
+	})
+}
+
 // handleHTTP is the HTTP handler that processes incoming requests.
 func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithCancelCause(r.Context())
+
+	// Get a wake lock on the host.
+
+	var releaseWakeLock func()
 	if p.cfg.HTTPProxy.ShowWaitingPage {
-		// If we are showing the waiting page, we don't want to block waiting
-		// for the host and health check to complete.
-		cancel()
+		p.triggerWakeAndHold()
+		releaseWakeLock = p.cb.WakeLock()
+		if releaseWakeLock == nil {
+			p.serveWaitingPage(w, r)
+			return
+		}
+	} else {
+		var err error
+		releaseWakeLock, err = p.cb.WakeLockContext(r.Context())
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			p.logger.Printf("failed to wake host: %v", err)
+			http.Error(w, "failed to wake host", http.StatusInternalServerError)
+			return
+		}
 	}
-	release, err := p.cb.AcquireWakeLock(ctx)
+	defer releaseWakeLock()
 
-	healthy, hostName, err := p.cb.Healthy(ctx, !p.cfg.HTTPProxy.ShowWaitingPage, true)
-	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-		return
+	// Wait until host is healthy.
+
+	if p.cfg.HTTPProxy.ShowWaitingPage {
+		p.triggerHealthCheck(r.Context())
+		if !p.healthy.Load() {
+			p.serveWaitingPage(w, r)
+			return
+		}
+	} else {
+		if err := p.waitHealthy(ctx); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			p.logger.Printf("failed to check host health: %v", err)
+			http.Error(w, "failed to check host health", http.StatusInternalServerError)
+			return
+		}
 	}
 
-	// Show waiting page if health check errored, or if the service is not
-	// healthy and the waiting page is enabled in the configuration.
-
-	if err != nil || (!healthy && p.cfg.HTTPProxy.ShowWaitingPage) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		waitingPageTpl.Execute(w, map[string]any{
-			"Name": p.cfg.ID,
-		})
-		return
-	}
-
-	// Proxy the request to the host instance otherwise.
+	// Proxy the request.
 
 	u := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%d", hostName, p.cfg.HTTPProxy.HostPort),
+		Host:   fmt.Sprintf("%s:%d", p.cb.HostName(), p.cfg.HTTPProxy.HostPort),
 	}
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
