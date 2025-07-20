@@ -15,15 +15,15 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/mathspace/zipnap/activator"
+	"github.com/mathspace/zipnap/activator/httpproxy"
 	"github.com/mathspace/zipnap/config"
 	"github.com/mathspace/zipnap/host"
 	"github.com/mathspace/zipnap/host/ec2host"
-	"github.com/mathspace/zipnap/proxy"
-	"github.com/mathspace/zipnap/proxy/httpproxy"
 )
 
 type instanceProxy struct {
-	p                proxy.Proxy
+	a                activator.Activator
 	ready            atomic.Bool
 	activeConns      atomic.Int32
 	lastActivityTime atomic.Value // time.Time
@@ -47,17 +47,17 @@ func newInstance(ctx context.Context, id string, cfg config.Instance) (*instance
 	proxies := make(map[string]*instanceProxy, len(cfg.Activators))
 	for svcID, svc := range cfg.Activators {
 		logger := log.New(os.Stdout, fmt.Sprintf("instance[%s] proxy[%s]: ", svcID), 0)
-		var p proxy.Proxy
+		var a activator.Activator
 		switch svc.Type {
 		case config.ServiceTypeHTTP:
-			p = httpproxy.New(svc, logger)
+			a = httpproxy.New(svc, logger)
 		case config.ServiceTypeTCP:
 			return nil, fmt.Errorf("tcp proxy not implemented yet")
 		default:
 			panic("unreachable")
 		}
 		proxies[svcID] = &instanceProxy{
-			p:      p,
+			a:      a,
 			logger: logger,
 		}
 	}
@@ -134,7 +134,7 @@ func (i *instance) runProxies(ctx context.Context) error {
 
 			},
 		}
-		go cancel(p.p.Run(innerCtx, cb))
+		go cancel(p.a.Run(innerCtx, cb))
 	}
 
 	<-innerCtx.Done()
