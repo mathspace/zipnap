@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/mathspace/zipnap/activator"
-	"github.com/mathspace/zipnap/config"
 )
 
 const (
@@ -36,7 +35,7 @@ var (
 // HTTPProxy is a HTTP proxy activator that upon receiving a request, wakes up
 // the host and proxies the request to it.
 type HTTPProxy struct {
-	cfg    config.Activator
+	cfg    Config
 	logger *log.Logger
 	cb     activator.Callbacks
 
@@ -44,7 +43,7 @@ type HTTPProxy struct {
 	healthyCond *sync.Cond  // Condition variable to wait for host health.
 }
 
-func New(cfg config.Activator, logger *log.Logger) *HTTPProxy {
+func New(cfg Config, logger *log.Logger) *HTTPProxy {
 	return &HTTPProxy{
 		cfg:    cfg,
 		logger: logger,
@@ -65,17 +64,17 @@ func (p *HTTPProxy) RegisterCallbacks(cb activator.Callbacks) {
 // A wake lock must be held before calling this function, as it will
 // perform a network request to the host.
 func (p *HTTPProxy) pingHealth(ctx context.Context, hostName string) (healthy bool, err error) {
-	if p.cfg.HTTPProxy.HealthCheck == nil {
+	if p.cfg.HealthCheck == nil {
 		return true, nil // No health check configured, assume healthy if host is up.
 	}
-	u := fmt.Sprintf("http://%s:%d%s", hostName, p.cfg.HTTPProxy.HostPort, p.cfg.HTTPProxy.HealthCheck.Path)
+	u := fmt.Sprintf("http://%s:%d%s", hostName, p.cfg.HostPort, p.cfg.HealthCheck.Path)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false, err
 	}
 	resp.Body.Close()
-	return slices.Contains(p.cfg.HTTPProxy.HealthCheck.StatusCodes, resp.StatusCode), nil
+	return slices.Contains(p.cfg.HealthCheck.StatusCodes, resp.StatusCode), nil
 }
 
 // runHealthChecker starts a goroutine that periodically checks the health of
@@ -83,7 +82,7 @@ func (p *HTTPProxy) pingHealth(ctx context.Context, hostName string) (healthy bo
 // before performing the health check.
 func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
 	for ctx.Err() == nil {
-		toCtx, cancel := context.WithTimeout(ctx, p.cfg.HTTPProxy.HealthCheck.Interval.Duration)
+		toCtx, cancel := context.WithTimeout(ctx, p.cfg.HealthCheck.Interval.Duration)
 		st := p.cb.HostState()
 		if st.Healthy() {
 			healthy, err := p.pingHealth(toCtx, st.Addr)
@@ -149,7 +148,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Wake up the host, keep it awake and wait for it to become healthy.
 
 	showWaitingPage := errors.New("")
-	waitCtx, cancel := context.WithTimeoutCause(ctx, p.cfg.HTTPProxy.ShowWaitingPageAfter.Duration, showWaitingPage)
+	waitCtx, cancel := context.WithTimeoutCause(ctx, p.cfg.ShowWaitingPageAfter.Duration, showWaitingPage)
 	unlock, err := func() (func(), error) {
 		unlock, err := p.cb.WakeLock(waitCtx, true)
 		if err != nil {
@@ -180,8 +179,8 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		p.logger.Printf("failed to wake host %s: %v", p.cfg.ID, err)
-		http.Error(w, fmt.Sprintf("failed to wake host %s", p.cfg.ID), http.StatusInternalServerError)
+		p.logger.Printf("failed to wake host: %v", err)
+		http.Error(w, "failed to wake host", http.StatusInternalServerError)
 		return
 	}
 	defer unlock()
@@ -190,7 +189,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	u := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%d", p.cb.HostState().Addr, p.cfg.HTTPProxy.HostPort),
+		Host:   fmt.Sprintf("%s:%d", p.cb.HostState().Addr, p.cfg.HostPort),
 	}
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
@@ -201,7 +200,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *HTTPProxy) Run(ctx context.Context) error {
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", p.cfg.HTTPProxy.ProxyHost, p.cfg.HTTPProxy.ProxyPort),
+		Addr:    fmt.Sprintf("%s:%d", p.cfg.ProxyHost, p.cfg.ProxyPort),
 		Handler: http.HandlerFunc(p.handleHTTP),
 	}
 
