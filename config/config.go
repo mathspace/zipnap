@@ -7,11 +7,16 @@ import (
 	"os"
 
 	"github.com/mathspace/zipnap/activator/httpproxy"
+	"github.com/mathspace/zipnap/activator/schedule"
 	"github.com/mathspace/zipnap/activator/tcpproxy"
 	"github.com/mathspace/zipnap/config/duration"
 	"github.com/mathspace/zipnap/host/ec2host"
 	"gopkg.in/yaml.v3"
 )
+
+type Validator interface {
+	Validate() error
+}
 
 // Activator represents a host activator that can wake up a host.
 type Activator struct {
@@ -19,17 +24,21 @@ type Activator struct {
 
 	HTTPProxy *httpproxy.Config `yaml:"http,omitempty"`
 	TCPProxy  *tcpproxy.Config  `yaml:"tcp,omitempty"`
+	Schedule  *schedule.Config  `yaml:"schedule,omitempty"`
 }
 
 func (s *Activator) Validate() error {
 	typeCount := 0
-	for _, v := range []any{s.HTTPProxy, s.TCPProxy} {
+	for _, v := range []Validator{s.HTTPProxy, s.TCPProxy, s.Schedule} {
 		if v != nil {
 			typeCount++
+			if err := v.Validate(); err != nil {
+				return fmt.Errorf("activator %q: %w", s.ID, err)
+			}
 		}
 	}
 	if typeCount != 1 {
-		return fmt.Errorf("activator must have exactly one type defined (HTTP or TCP), found %d", typeCount)
+		return fmt.Errorf("activator must have exactly one type defined, found %d", typeCount)
 	}
 	return nil
 }
@@ -62,13 +71,16 @@ func (i *Instance) Validate() error {
 	}
 
 	typeCount := 0
-	for _, v := range []any{i.EC2} {
+	for _, v := range []Validator{i.EC2} {
 		if v != nil {
 			typeCount++
+			if err := v.Validate(); err != nil {
+				return fmt.Errorf("instance %q: %w", i.ID, err)
+			}
 		}
 	}
 	if typeCount != 1 {
-		return fmt.Errorf("instance must have exactly one type defined (EC2), found %d", typeCount)
+		return fmt.Errorf("instance must have exactly one type defined, found %d", typeCount)
 	}
 
 	for svcID, svc := range i.Activators {
