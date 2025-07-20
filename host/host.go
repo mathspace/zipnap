@@ -7,8 +7,10 @@ import "context"
 type Status string
 
 const (
-	StatusStarting Status = "starting"
+	// StatusStarted indicates that the host is currently running and available
+	// for use, including any host level health checks, etc.
 	StatusStarted  Status = "started"
+	StatusStarting Status = "starting"
 	StatusStopping Status = "stopping"
 	StatusStopped  Status = "stopped"
 	StatusUnknown  Status = "unknown"

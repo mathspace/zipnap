@@ -58,36 +58,55 @@ func (h *EC2Host) Stop(ctx context.Context) error {
 // configuration.
 func (h *EC2Host) State(ctx context.Context) (host.State, error) {
 	st := host.State{}
-	out, err := h.client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: []string{h.cfg.EC2.InstanceID},
+
+	// Get instance status first.
+
+	statusResp, err := h.client.DescribeInstanceStatus(ctx, &ec2.DescribeInstanceStatusInput{
+		InstanceIds:         []string{h.cfg.EC2.InstanceID},
+		IncludeAllInstances: aws.Bool(true),
 	})
 	if err != nil {
 		return st, err
 	}
-	if len(out.Reservations) != 1 || len(out.Reservations[0].Instances) != 1 {
-		return st, fmt.Errorf("expected exactly one instance, got %d reservations and %d instances", len(out.Reservations), len(out.Reservations[0].Instances))
+	if len(statusResp.InstanceStatuses) != 1 {
+		return st, fmt.Errorf("expected exactly one instance status, got %d", len(statusResp.InstanceStatuses))
 	}
-	inst := out.Reservations[0].Instances[0]
+	s := statusResp.InstanceStatuses[0]
 
-	if inst.State == nil {
-		st.Status = host.StatusUnknown
-	} else {
-		switch inst.State.Name {
-		case ec2types.InstanceStateNamePending:
-			st.Status = host.StatusStarting
-		case ec2types.InstanceStateNameRunning:
+	switch s.InstanceState.Name {
+	case ec2types.InstanceStateNameRunning:
+		if s.SystemStatus != nil && s.SystemStatus.Status == ec2types.SummaryStatusOk &&
+			s.InstanceStatus != nil && s.InstanceStatus.Status == ec2types.SummaryStatusOk {
 			st.Status = host.StatusStarted
-		case ec2types.InstanceStateNameStopping:
-			st.Status = host.StatusStopping
-		case ec2types.InstanceStateNameStopped:
-			st.Status = host.StatusStopped
-		default:
-			st.Status = host.StatusUnknown
+		} else {
+			st.Status = host.StatusStarting
 		}
+	case ec2types.InstanceStateNamePending:
+		st.Status = host.StatusStarting
+	case ec2types.InstanceStateNameStopping:
+		st.Status = host.StatusStopping
+	case ec2types.InstanceStateNameStopped:
+		st.Status = host.StatusStopped
+	default:
+		st.Status = host.StatusUnknown
 	}
 
-	if inst.PrivateIpAddress != nil {
-		st.HostName = *inst.PrivateIpAddress
+	// Get the hostname if instance has started.
+
+	if st.Status == host.StatusStarted {
+		resp, err := h.client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			InstanceIds: []string{h.cfg.EC2.InstanceID},
+		})
+		if err != nil {
+			return st, err
+		}
+		if len(resp.Reservations) == 0 || len(resp.Reservations[0].Instances) == 0 {
+			return st, fmt.Errorf("no instances found for ID %s", h.cfg.EC2.InstanceID)
+		}
+		inst := resp.Reservations[0].Instances[0]
+		if inst.PrivateIpAddress != nil {
+			st.HostName = *inst.PrivateIpAddress
+		}
 	}
 
 	return st, nil
