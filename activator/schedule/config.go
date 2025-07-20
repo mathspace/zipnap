@@ -32,14 +32,14 @@ func (cs *Cron) UnmarshalYAML(n *yaml.Node) error {
 // Config holds the configuration for the scheduler.
 type Config struct {
 	Cron Cron `yaml:"cron"`
-	// Timeout specifies the duration the host is kept awake after it's woken up
+	// KeepAwake specifies the duration the host is kept awake after it's woken up
 	// by the scheduler.
-	Timeout duration.Duration `yaml:"duration"`
+	KeepAwake duration.Duration `yaml:"duration"`
 }
 
 func (c Config) Validate() error {
-	if c.Timeout.Duration <= 0 {
-		return fmt.Errorf("timeout must be positive, got %v", c.Timeout)
+	if c.KeepAwake.Duration <= 0 {
+		return fmt.Errorf("timeout must be positive, got %v", c.KeepAwake)
 	}
 	if c.Cron.Schedule == nil {
 		return fmt.Errorf("cron schedule is not set")
