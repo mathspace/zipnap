@@ -161,6 +161,21 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			if context.Cause(waitCtx) == showWaitingPage {
+				// FIXME: this is a low resource concious way of persisting
+				// attempt to wake the host while the next request from the
+				// waiting page comes through. This is a poor method because we
+				// are creating a new wake lock and a new goroutine for each
+				// request, which is not efficient.
+				go func() {
+					ctx, cancel := context.WithTimeout(ctx, wakeAndHoldTimeout)
+					defer cancel()
+					unlock, err := p.cb.WakeLock(ctx, true)
+					if err != nil {
+						return
+					}
+					defer unlock()
+					<-ctx.Done()
+				}()
 				p.serveWaitingPage(w)
 			}
 			return
