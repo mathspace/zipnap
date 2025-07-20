@@ -3,6 +3,8 @@ package activator
 
 import (
 	"context"
+
+	"github.com/mathspace/zipnap/host"
 )
 
 type Callbacks struct {
@@ -15,7 +17,10 @@ type Callbacks struct {
 	// the lock is unlocked. If host is awake at the time of the call, it will
 	// return immediately without blocking or returning an error even if the
 	// context is done.
-	WakeLock func(ctx context.Context, wake bool) (unlock func(), hostName string, err error)
+	WakeLock func(ctx context.Context, wake bool) (unlock func(), err error)
+
+	// State returns the current state of the host.
+	HostState func() host.State
 }
 
 // Activator is an interface for an activator. It is used to wake up the host

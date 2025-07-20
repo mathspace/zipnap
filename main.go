@@ -103,7 +103,7 @@ func (i *instance) runProxies(ctx context.Context) error {
 				// If we are ready or asked not to wait, return immediately.
 				st := i.lastHostState.Load().(host.State)
 				if p.ready.Load() || !wait {
-					return ready, st.HostName
+					return ready, st.Addr
 				}
 
 				// This ensures if the context is cancelled, we stop waiting
@@ -128,7 +128,7 @@ func (i *instance) runProxies(ctx context.Context) error {
 					}
 					st := i.lastHostState.Load().(host.State)
 					if p.ready.Load() {
-						return true, st.HostName
+						return true, st.Addr
 					}
 				}
 

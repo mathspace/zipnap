@@ -105,7 +105,7 @@ func (h *EC2Host) State(ctx context.Context) (host.State, error) {
 		}
 		inst := resp.Reservations[0].Instances[0]
 		if inst.PrivateIpAddress != nil {
-			st.HostName = *inst.PrivateIpAddress
+			st.Addr = *inst.PrivateIpAddress
 		}
 	}
 

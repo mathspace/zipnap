@@ -17,11 +17,15 @@ const (
 )
 
 // State represents the current state of a host, including its status and
-// hostname. The hostname is typically the public IP address or DNS name of the
+// hostname. The Addr is typically the public IP address or DNS name of the
 // host, which can be used to access the service running on it.
 type State struct {
-	Status   Status
-	HostName string
+	Status Status
+	Addr   string
+}
+
+func (s State) Healthy() bool {
+	return s.Status == StatusStarted && s.Addr != ""
 }
 
 // Host is an interface that defines the methods required to manage a host's

@@ -37,9 +37,8 @@ type HTTPProxy struct {
 	logger *log.Logger
 	cb     activator.Callbacks
 
-	healthy       atomic.Bool // Indicates if the host is healthy.
-	healthyCond   *sync.Cond  // Condition variable to wait for host health.
-	healthCheckCh chan struct{}
+	healthy     atomic.Bool // Indicates if the host is healthy.
+	healthyCond *sync.Cond  // Condition variable to wait for host health.
 }
 
 func New(cfg config.Activator, logger *log.Logger) *HTTPProxy {
@@ -47,8 +46,7 @@ func New(cfg config.Activator, logger *log.Logger) *HTTPProxy {
 		cfg:    cfg,
 		logger: logger,
 
-		healthyCond:   &sync.Cond{L: &sync.Mutex{}},
-		healthCheckCh: make(chan struct{}, 1),
+		healthyCond: &sync.Cond{L: &sync.Mutex{}},
 	}
 }
 
@@ -81,34 +79,27 @@ func (p *HTTPProxy) pingHealth(ctx context.Context, hostName string) (healthy bo
 // the host by pinging the health check endpoint. It waits for the host to wake up
 // before performing the health check.
 func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
-	for {
-		// Wait to acquire a wake lock before starting the health check.
-		unlock, hostName, err := p.cb.WakeLock(ctx, false)
-		if err != nil {
-			// The only way for err to be non-nil here is if main ctx
-			// is done, which means we should stop the health checker.
-			return
-		}
-		timer := time.NewTimer(p.cfg.HTTPProxy.HealthCheck.Interval.Duration)
-		func() {
-			defer unlock()
-			ctx, cancel := context.WithTimeout(ctx, p.cfg.HTTPProxy.HealthCheck.Interval.Duration-time.Millisecond*100)
-			defer cancel()
-			healthy, err := p.pingHealth(ctx, hostName)
+	for ctx.Err() == nil {
+		toCtx, cancel := context.WithTimeoutCause(ctx, p.cfg.HTTPProxy.HealthCheck.Interval.Duration, innerCause)
+		st := p.cb.HostState()
+		if st.Healthy() {
+			healthy, err := p.pingHealth(toCtx, st.Addr)
 			if err != nil {
 				p.healthy.Store(false)
-				return
+			} else {
+				p.healthy.Store(healthy)
+				if healthy {
+					p.healthyCond.Broadcast()
+				}
 			}
-			p.healthy.Store(healthy)
-			if healthy {
-				p.healthyCond.Broadcast()
-			}
-		}()
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
+		} else {
+			p.healthy.Store(false)
 		}
+		// Kill time until we reach the end of the interval.
+		select {
+		case <-toCtx.Done():
+		}
+		cancel()
 	}
 }
 
@@ -154,15 +145,21 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	//
+	// Wake up the host, keep it awake and wait for it to become healthy.
 
 	showWaitingPage := errors.New("")
-	lockCtx, cancel := context.WithTimeoutCause(ctx, p.cfg.HTTPProxy.ShowWaitingPageAfter.Duration, showWaitingPage)
-	unlock, hostName, err := p.cb.WakeLock(lockCtx, true)
+	waitCtx, cancel := context.WithTimeoutCause(ctx, p.cfg.HTTPProxy.ShowWaitingPageAfter.Duration, showWaitingPage)
+	unlock, err := func() (func(), error) {
+		unlock, err := p.cb.WakeLock(waitCtx, true)
+		if err != nil {
+			return nil, err
+		}
+		return unlock, p.waitHealthy(waitCtx)
+	}()
 	cancel()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if context.Cause(lockCtx) == showWaitingPage {
+			if context.Cause(waitCtx) == showWaitingPage {
 				p.serveWaitingPage(w)
 			}
 			return
@@ -171,57 +168,13 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to wake host %s", p.cfg.ID), http.StatusInternalServerError)
 		return
 	}
-
 	defer unlock()
-
-	// Get a wake lock on the host.
-
-	var releaseWakeLock func()
-	if p.cfg.HTTPProxy.ShowWaitingPage {
-		p.triggerWakeAndHold()
-		releaseWakeLock = p.cb.TryWakeLock()
-		if releaseWakeLock == nil {
-			p.serveWaitingPage(w, r)
-			return
-		}
-	} else {
-		var err error
-		releaseWakeLock, err = p.cb.AcquireWakeLock(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return
-			}
-			p.logger.Printf("failed to wake host: %v", err)
-			http.Error(w, "failed to wake host", http.StatusInternalServerError)
-			return
-		}
-	}
-	defer releaseWakeLock()
-
-	// Wait until host is healthy.
-
-	p.triggerHealthCheck()
-	if p.cfg.HTTPProxy.ShowWaitingPage {
-		if !p.healthy.Load() {
-			p.serveWaitingPage(w)
-			return
-		}
-	} else {
-		if err := p.waitHealthy(ctx); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return
-			}
-			p.logger.Printf("failed to check host health: %v", err)
-			http.Error(w, "failed to check host health", http.StatusInternalServerError)
-			return
-		}
-	}
 
 	// Proxy the request.
 
 	u := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%d", p.cb.HostName(), p.cfg.HTTPProxy.HostPort),
+		Host:   fmt.Sprintf("%s:%d", p.cb.HostState().Addr, p.cfg.HTTPProxy.HostPort),
 	}
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
@@ -241,6 +194,8 @@ func (p *HTTPProxy) Run(ctx context.Context) error {
 		p.logger.Print("starting ...")
 		cancel(server.ListenAndServe())
 	}()
+
+	go p.runHealthChecker(ctx)
 
 	<-ctx.Done()
 	cause := context.Cause(ctx)
