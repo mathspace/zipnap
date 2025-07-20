@@ -36,6 +36,7 @@ var (
 // the host and proxies the request to it.
 type HTTPProxy struct {
 	cfg    Config
+	name   string
 	logger *log.Logger
 	cb     activator.Callbacks
 
@@ -43,9 +44,10 @@ type HTTPProxy struct {
 	healthyCond *sync.Cond  // Condition variable to wait for host health.
 }
 
-func New(cfg Config, logger *log.Logger) *HTTPProxy {
+func New(cfg Config, name string, logger *log.Logger) *HTTPProxy {
 	return &HTTPProxy{
 		cfg:    cfg,
+		name:   name,
 		logger: logger,
 
 		healthyCond: &sync.Cond{L: &sync.Mutex{}},
@@ -135,7 +137,7 @@ func (p *HTTPProxy) serveWaitingPage(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	waitingPageTpl.Execute(w, map[string]any{
-		"Name":                   p.cfg.ID,
+		"Name":                   p.name,
 		"RefreshIntervalSeconds": wakeAndHoldTimeout - time.Second,
 	})
 }
