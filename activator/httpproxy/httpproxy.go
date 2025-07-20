@@ -1,3 +1,6 @@
+// Package httpproxy implements a HTTP proxy activator that wakes up a host and
+// proxies requests to it. It supports health checks and can serve a waiting
+// page when the host is not healthy or not awake.
 package httpproxy
 
 import (
@@ -80,7 +83,7 @@ func (p *HTTPProxy) pingHealth(ctx context.Context, hostName string) (healthy bo
 // before performing the health check.
 func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
 	for ctx.Err() == nil {
-		toCtx, cancel := context.WithTimeoutCause(ctx, p.cfg.HTTPProxy.HealthCheck.Interval.Duration, innerCause)
+		toCtx, cancel := context.WithTimeout(ctx, p.cfg.HTTPProxy.HealthCheck.Interval.Duration)
 		st := p.cb.HostState()
 		if st.Healthy() {
 			healthy, err := p.pingHealth(toCtx, st.Addr)
@@ -96,9 +99,7 @@ func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
 			p.healthy.Store(false)
 		}
 		// Kill time until we reach the end of the interval.
-		select {
-		case <-toCtx.Done():
-		}
+		<-toCtx.Done()
 		cancel()
 	}
 }
@@ -179,8 +180,9 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
 
-// RunProxy starts the HTTP proxy server and blocks until the context is
-// cancelled or an error occurs.
+// Run starts the HTTP proxy server and listens for incoming requests. It also
+// starts a health checker that periodically checks the health of the host. The
+// server will run until the context is done or an error occurs.
 func (p *HTTPProxy) Run(ctx context.Context) error {
 
 	server := &http.Server{
