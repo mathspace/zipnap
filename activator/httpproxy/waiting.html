@@ -204,26 +204,19 @@
       <p class="subtitle">Hang tight! Cogs are turning.</p>
       <div class="spinner"></div>
       <div class="refresh-info">
-        <span
-          >Auto-refreshing in
-          <span class="countdown" id="countdown">10</span> seconds</span
-        >
+        <span>Will auto-refresh automatically</span>
       </div>
     </div>
 
     <script>
       // Auto-refresh functionality
-      let countdownValue = 10;
-      const countdownElement = document.getElementById("countdown");
+      const refreshAt = new Date(Date.now() + {{.RefreshIntervalSeconds}} * 1000);
 
       function updateCountdown() {
-        countdownElement.textContent = countdownValue;
-
-        if (countdownValue <= 0) {
+        if (new Date() >= refreshAt) {
           location.reload();
         } else {
-          countdownValue--;
-          setTimeout(updateCountdown, 1000);
+          setTimeout(updateCountdown, 100);
         }
       }
 

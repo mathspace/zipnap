@@ -24,7 +24,7 @@ import (
 
 const (
 	// Duration to hold the host awake after the last wake trigger.
-	wakeAndHoldTimeout = 20 * time.Second
+	wakeAndHoldTimeout = 10 * time.Second
 )
 
 var (
@@ -130,14 +130,14 @@ func (p *HTTPProxy) waitHealthy(ctx context.Context) error {
 	return nil
 }
 
-// serveWaitingPage serves a waiting page to the client. It is used when the
-// host is not healthy or when the host is not awake and the ShowWaitingPage
-// configuration is enabled.
+// serveWaitingPage serves a waiting page to the client if the page cannot be
+// served in the timely manner due to the host not being healthy.
 func (p *HTTPProxy) serveWaitingPage(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	waitingPageTpl.Execute(w, map[string]any{
-		"Name": p.cfg.ID,
+		"Name":                   p.cfg.ID,
+		"RefreshIntervalSeconds": wakeAndHoldTimeout - time.Second,
 	})
 }
 
