@@ -28,10 +28,10 @@ type instanceRuntime struct {
 	callbacks     activator.Callbacks // Callbacks for activators to use
 	host          host.Host           // Host interface for managing the EC2 instance
 	lastHostState atomic.Value        // host.State
-	wakupCh       chan struct{}
-	hostReadyCond *sync.Cond // Condition variable to signal when the host is ready
-	logger        *log.Logger
-	wakeLocks     atomic.Int32
+	wakupCh       chan struct{}       // Channel to signal wakeup requests
+	hostReadyCond *sync.Cond          // Condition variable to signal when the host is ready
+	logger        *log.Logger         // Logger prefixed with instance ID
+	wakeLocks     atomic.Int32        // Number of active wake locks
 }
 
 func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*instanceRuntime, error) {
@@ -81,10 +81,13 @@ func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*
 	return inst, nil
 }
 
+// hostStateCallback is called by activators to get the current state of the
+// host.
 func (i *instanceRuntime) hostStateCallback() host.State {
 	return i.lastHostState.Load().(host.State)
 }
 
+// wakeLockCallback is called by activators to request a wake lock on the host.
 func (i *instanceRuntime) wakeLockCallback(ctx context.Context, wake bool) (unlock func(), err error) {
 	i.hostReadyCond.L.Lock()
 	defer i.hostReadyCond.L.Unlock()
