@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -19,6 +18,7 @@ import (
 	"github.com/mathspace/zipnap/config"
 	"github.com/mathspace/zipnap/host"
 	"github.com/mathspace/zipnap/host/ec2host"
+	"github.com/mathspace/zipnap/instance"
 )
 
 type instanceRuntime struct {
@@ -27,11 +27,11 @@ type instanceRuntime struct {
 	activators    map[string]activator.Activator
 	callbacks     activator.Callbacks // Callbacks for activators to use
 	host          host.Host           // Host interface for managing the EC2 instance
-	lastHostState atomic.Value        // host.State
-	wakupCh       chan struct{}       // Channel to signal wakeup requests
+	wakeupCh      chan struct{}       // Channel to signal wakeup requests
 	hostReadyCond *sync.Cond          // Condition variable to signal when the host is ready
 	logger        *log.Logger         // Logger prefixed with instance ID
-	wakeLocks     atomic.Int32        // Number of active wake locks
+	lockDeltaCh   chan int            // Channel to signal changes in the number of wake locks
+	state         atomic.Value        // activator.InstanceState
 }
 
 func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*instanceRuntime, error) {
@@ -39,7 +39,7 @@ func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*
 	activators := make(map[string]activator.Activator, len(cfg.Activators))
 
 	for actID, act := range cfg.Activators {
-		logger := log.New(os.Stdout, fmt.Sprintf("instance[%s] activator[%s]: ", actID), 0)
+		logger := log.New(os.Stdout, fmt.Sprintf("instance[%s] activator[%s]: ", id, actID), 0)
 		var a activator.Activator
 		if act.HTTPProxy != nil {
 			a = httpproxy.New(act.HTTPProxy, actID, logger)
@@ -69,22 +69,22 @@ func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*
 		id:            id,
 		cfg:           cfg,
 		activators:    activators,
-		wakupCh:       make(chan struct{}, 1),
+		wakeupCh:      make(chan struct{}, 1),
 		host:          h,
 		hostReadyCond: sync.NewCond(&sync.Mutex{}),
 	}
 	inst.callbacks = activator.Callbacks{
-		HostState: inst.hostStateCallback,
-		WakeLock:  inst.wakeLockCallback,
+		State:       inst.hostStateCallback,
+		HealthyLock: inst.wakeLockCallback,
 	}
-	inst.lastHostState.Store(host.State{Status: host.StatusUnknown})
+	inst.state.Store(instance.UnhealthyState)
 	return inst, nil
 }
 
 // hostStateCallback is called by activators to get the current state of the
 // host.
-func (i *instanceRuntime) hostStateCallback() host.State {
-	return i.lastHostState.Load().(host.State)
+func (i *instanceRuntime) hostStateCallback() instance.State {
+	return i.state.Load().(instance.State)
 }
 
 // wakeLockCallback is called by activators to request a wake lock on the host.
@@ -97,10 +97,10 @@ func (i *instanceRuntime) wakeLockCallback(ctx context.Context, wake bool) (unlo
 		i.hostReadyCond.Broadcast()
 	})
 
-	for i.lastHostState.Load().(host.State).Status != host.StatusStarted {
+	for !i.state.Load().(instance.State).Healthy {
 		if wake {
 			select {
-			case i.wakupCh <- struct{}{}:
+			case i.wakeupCh <- struct{}{}:
 			default:
 				// If the channel is already full, we don't need to wake up again.
 			}
@@ -111,12 +111,13 @@ func (i *instanceRuntime) wakeLockCallback(ctx context.Context, wake bool) (unlo
 		}
 	}
 
-	i.wakeLocks.Add(1)
-	return func() { i.wakeLocks.Add(-1) }, nil
+	i.lockDeltaCh <- 1
+	return func() { i.lockDeltaCh <- -1 }, nil
 }
 
 func (i *instanceRuntime) runActivators(ctx context.Context) error {
 	innerCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 
 	for _, a := range i.activators {
 		a.RegisterCallbacks(i.callbacks)
@@ -131,82 +132,82 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 
 	logger := log.New(i.logger.Writer(), fmt.Sprintf("instance[%s] recon: ", i.id), 0)
 
-	const timerInterval = 5 * time.Second
-	var wakeupRequested bool
+	var idle atomic.Bool
 
+	go func() {
+		var lastUnlock time.Time
+		wakeLocks := 0
+		for {
+			select {
+			case delta := <-i.lockDeltaCh:
+				if delta < 0 {
+					lastUnlock = time.Now()
+				}
+				wakeLocks += delta
+				idle.Store(wakeLocks == 0 && time.Since(lastUnlock) <= i.cfg.Timeout.Duration)
+			case <-ctx.Done():
+				return
+			}
+		}
+
+	}()
+
+	var wakeupRequested bool
 	for ctx.Err() == nil {
-		ctx, cancel := context.WithTimeout(ctx, timerInterval)
-		func() {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		if err := func() error {
 
 			logger.Printf("waking up")
 
-			st, err := i.host.State(ctx)
+			hostSt, err := i.host.State(ctx)
 			if err != nil {
-				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-					logger.Printf("error getting host state: %v", err)
-				}
-				return
-			}
-			i.lastHostState.Store(st)
-
-			logger.Printf("host state: %s", st.Status)
-
-			// Decision
-
-			idle := true
-			for _, p := range i.activators {
-				if p.activeConns.Load() > 0 {
-					idle = false
-					break
-				}
-				if time.Since(p.lastActivityTime.Load().(time.Time)) <= i.cfg.Timeout.Duration {
-					idle = false
-					break
-				}
+				return err
 			}
 
-			if details.State != ec2types.InstanceStateNameRunning {
-				ec2CurStatus.Store(ec2StatusNotReady)
+			logger.Printf("host state: %s", hostSt.Status)
+			idle := idle.Load()
+
+			if wakeupRequested && hostSt.Status == host.StatusStopped {
+				i.state.Store(instance.UnhealthyState)
+				log.Print("waking up host")
+				if err := i.host.Start(ctx); err != nil {
+					return err
+				}
+			} else if hostSt.Status == host.StatusStarted {
+				if wakeupRequested || !idle {
+					i.state.Store(instance.State{
+						Healthy: true,
+						Addr:    hostSt.Addr,
+					})
+				}
+				if wakeupRequested {
+					i.hostReadyCond.Broadcast()
+					wakeupRequested = false
+				} else if idle {
+					i.state.Store(instance.UnhealthyState)
+					log.Print("stopping due to inactivity")
+					if err := i.host.Stop(ctx); err != nil {
+						return err
+					}
+				}
+			} else {
+				i.state.Store(instance.UnhealthyState)
 			}
 
-			if wakeupRequested && details.State == ec2types.InstanceStateNameStopped {
-				log.Printf("waking up EC2 instance %s", cfgInst.EC2.InstanceID)
-				// TODO host start
-
-			} else if idle && details.State == ec2types.InstanceStateNameRunning {
-				ec2CurStatus.Store(ec2StatusNotReady)
-				log.Printf("stopping EC2 instance %s due to inactivity", cfgInst.EC2.InstanceID)
-				// TODO host stop
-
-			} else if details.State == ec2types.InstanceStateNameRunning {
-				u := fmt.Sprintf("http://%s:%d/", details.IP, cfgInst.Services[0].HTTP.ServicePort)
-				req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					log.Printf("health-check: request to %s failed: %v", u, err)
-					ec2CurStatus.Store(ec2StatusNotReady)
-					continue
-				}
-				resp.Body.Close()
-				if resp.StatusCode < 200 || resp.StatusCode >= 500 {
-					log.Printf("health-check: request to %s returned status %d", u, resp.StatusCode)
-					ec2CurStatus.Store(ec2StatusNotReady)
-					continue
-				}
-				log.Printf("health-check: EC2 instance %s is healthy", cfgInst.EC2.InstanceID)
-				ec2CurStatus.Store(ec2StatusReady)
-				ec2ReadyCond.Broadcast()
-				wakeupRequested = false
+			return nil
+		}(); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logger.Printf("error: %v", err)
 			}
-
-		}()
-
-		select {
-		case <-ctx.Done():
-		case <-i.wakupCh:
-			wakeupRequested = true
 		}
+
+		<-ctx.Done()
 		cancel()
+		select {
+		case <-i.wakeupCh:
+			wakeupRequested = true
+		default:
+		}
 	}
 }
 
@@ -217,6 +218,7 @@ func run(configPath string) error {
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 
 	instanceRuntimes := make(map[string]*instanceRuntime, len(cfg.Instances))
 	for i, instCfg := range cfg.Instances {

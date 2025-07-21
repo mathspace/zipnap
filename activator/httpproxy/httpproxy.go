@@ -85,8 +85,8 @@ func (p *HTTPProxy) pingHealth(ctx context.Context, hostName string) (healthy bo
 func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
 	for ctx.Err() == nil {
 		toCtx, cancel := context.WithTimeout(ctx, p.cfg.HealthCheck.Interval.Duration)
-		st := p.cb.HostState()
-		if st.Healthy() {
+		st := p.cb.State()
+		if st.Healthy {
 			healthy, err := p.pingHealth(toCtx, st.Addr)
 			if err != nil {
 				p.healthy.Store(false)
@@ -152,7 +152,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	showWaitingPage := errors.New("")
 	waitCtx, cancel := context.WithTimeoutCause(ctx, p.cfg.ShowWaitingPageAfter.Duration, showWaitingPage)
 	unlock, err := func() (func(), error) {
-		unlock, err := p.cb.WakeLock(waitCtx, true)
+		unlock, err := p.cb.HealthyLock(waitCtx, true)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +170,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				go func() {
 					ctx, cancel := context.WithTimeout(ctx, wakeAndHoldTimeout)
 					defer cancel()
-					unlock, err := p.cb.WakeLock(ctx, true)
+					unlock, err := p.cb.HealthyLock(ctx, true)
 					if err != nil {
 						return
 					}
@@ -191,7 +191,7 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	u := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%d", p.cb.HostState().Addr, p.cfg.HostPort),
+		Host:   fmt.Sprintf("%s:%d", p.cb.State().Addr, p.cfg.HostPort),
 	}
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }

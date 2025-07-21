@@ -32,7 +32,7 @@ func (s *Schedule) Run(ctx context.Context) error {
 			s.logger.Print("waking host")
 			ctx, cancel := context.WithTimeout(ctx, s.cfg.KeepAwake.Duration)
 			defer cancel()
-			unlock, err := s.cb.WakeLock(ctx, true)
+			unlock, err := s.cb.HealthyLock(ctx, true)
 			if err != nil {
 				return
 			}
