@@ -133,81 +133,80 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 
 	const timerInterval = 5 * time.Second
 	var wakeupRequested bool
-	timer := time.NewTicker(timerInterval)
 
-	for {
+	for ctx.Err() == nil {
+		ctx, cancel := context.WithTimeout(ctx, timerInterval)
+		func() {
 
-		// Wait for either 5 seconds or a wakeup signal.
+			logger.Printf("waking up")
+
+			st, err := i.host.State(ctx)
+			if err != nil {
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					logger.Printf("error getting host state: %v", err)
+				}
+				return
+			}
+			i.lastHostState.Store(st)
+
+			logger.Printf("host state: %s", st.Status)
+
+			// Decision
+
+			idle := true
+			for _, p := range i.activators {
+				if p.activeConns.Load() > 0 {
+					idle = false
+					break
+				}
+				if time.Since(p.lastActivityTime.Load().(time.Time)) <= i.cfg.Timeout.Duration {
+					idle = false
+					break
+				}
+			}
+
+			if details.State != ec2types.InstanceStateNameRunning {
+				ec2CurStatus.Store(ec2StatusNotReady)
+			}
+
+			if wakeupRequested && details.State == ec2types.InstanceStateNameStopped {
+				log.Printf("waking up EC2 instance %s", cfgInst.EC2.InstanceID)
+				// TODO host start
+
+			} else if idle && details.State == ec2types.InstanceStateNameRunning {
+				ec2CurStatus.Store(ec2StatusNotReady)
+				log.Printf("stopping EC2 instance %s due to inactivity", cfgInst.EC2.InstanceID)
+				// TODO host stop
+
+			} else if details.State == ec2types.InstanceStateNameRunning {
+				u := fmt.Sprintf("http://%s:%d/", details.IP, cfgInst.Services[0].HTTP.ServicePort)
+				req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					log.Printf("health-check: request to %s failed: %v", u, err)
+					ec2CurStatus.Store(ec2StatusNotReady)
+					continue
+				}
+				resp.Body.Close()
+				if resp.StatusCode < 200 || resp.StatusCode >= 500 {
+					log.Printf("health-check: request to %s returned status %d", u, resp.StatusCode)
+					ec2CurStatus.Store(ec2StatusNotReady)
+					continue
+				}
+				log.Printf("health-check: EC2 instance %s is healthy", cfgInst.EC2.InstanceID)
+				ec2CurStatus.Store(ec2StatusReady)
+				ec2ReadyCond.Broadcast()
+				wakeupRequested = false
+			}
+
+		}()
+
 		select {
 		case <-ctx.Done():
-			return
-		case <-timer.C:
 		case <-i.wakupCh:
 			wakeupRequested = true
 		}
-
-		logger.Printf("waking up")
-
-		st, err := i.host.State(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return
-			}
-			logger.Printf("error getting host state: %v", err)
-			continue
-		}
-		i.lastHostState.Store(st)
-
-		logger.Printf("host state: %s", st.Status)
-
-		// Decision
-
-		idle := true
-		for _, p := range i.activators {
-			if p.activeConns.Load() > 0 {
-				idle = false
-				break
-			}
-			if time.Since(p.lastActivityTime.Load().(time.Time)) <= i.cfg.Timeout.Duration {
-				idle = false
-				break
-			}
-		}
-
-		if details.State != ec2types.InstanceStateNameRunning {
-			ec2CurStatus.Store(ec2StatusNotReady)
-		}
-
-		if wakeupRequested && details.State == ec2types.InstanceStateNameStopped {
-			log.Printf("waking up EC2 instance %s", cfgInst.EC2.InstanceID)
-			// TODO host start
-
-		} else if idle && details.State == ec2types.InstanceStateNameRunning {
-			ec2CurStatus.Store(ec2StatusNotReady)
-			log.Printf("stopping EC2 instance %s due to inactivity", cfgInst.EC2.InstanceID)
-			// TODO host stop
-
-		} else if details.State == ec2types.InstanceStateNameRunning {
-			u := fmt.Sprintf("http://%s:%d/", details.IP, cfgInst.Services[0].HTTP.ServicePort)
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				log.Printf("health-check: request to %s failed: %v", u, err)
-				ec2CurStatus.Store(ec2StatusNotReady)
-				continue
-			}
-			resp.Body.Close()
-			if resp.StatusCode < 200 || resp.StatusCode >= 500 {
-				log.Printf("health-check: request to %s returned status %d", u, resp.StatusCode)
-				ec2CurStatus.Store(ec2StatusNotReady)
-				continue
-			}
-			log.Printf("health-check: EC2 instance %s is healthy", cfgInst.EC2.InstanceID)
-			ec2CurStatus.Store(ec2StatusReady)
-			ec2ReadyCond.Broadcast()
-			wakeupRequested = false
-		}
-
+		cancel()
 	}
 }
 
