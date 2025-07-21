@@ -25,8 +25,9 @@ type instanceRuntime struct {
 	id            string
 	cfg           *config.Instance
 	activators    map[string]activator.Activator
-	host          host.Host    // Host interface for managing the EC2 instance
-	lastHostState atomic.Value // host.State
+	callbacks     activator.Callbacks // Callbacks for activators to use
+	host          host.Host           // Host interface for managing the EC2 instance
+	lastHostState atomic.Value        // host.State
 	wakupCh       chan struct{}
 	hostReadyCond *sync.Cond // Condition variable to signal when the host is ready
 	logger        *log.Logger
@@ -72,6 +73,10 @@ func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*
 		host:          h,
 		hostReadyCond: sync.NewCond(&sync.Mutex{}),
 	}
+	inst.callbacks = activator.Callbacks{
+		HostState: inst.hostStateCallback,
+		WakeLock:  inst.wakeLockCallback,
+	}
 	inst.lastHostState.Store(host.State{Status: host.StatusUnknown})
 	return inst, nil
 }
@@ -111,10 +116,7 @@ func (i *instanceRuntime) runActivators(ctx context.Context) error {
 	innerCtx, cancel := context.WithCancelCause(ctx)
 
 	for _, a := range i.activators {
-		a.RegisterCallbacks(activator.Callbacks{
-			HostState: i.hostStateCallback,
-			WakeLock:  i.wakeLockCallback,
-		})
+		a.RegisterCallbacks(i.callbacks)
 		go cancel(a.Run(innerCtx))
 	}
 
