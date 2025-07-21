@@ -134,6 +134,7 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 
 	var idle atomic.Bool
 
+	// idle determination loop.
 	go func() {
 		var lastUnlock time.Time
 		wakeLocks := 0
@@ -149,7 +150,6 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 				return
 			}
 		}
-
 	}()
 
 	var wakeupRequested bool
