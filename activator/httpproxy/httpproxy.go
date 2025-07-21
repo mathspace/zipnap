@@ -35,7 +35,7 @@ var (
 // HTTPProxy is a HTTP proxy activator that upon receiving a request, wakes up
 // the host and proxies the request to it.
 type HTTPProxy struct {
-	cfg    Config
+	cfg    *Config
 	name   string
 	logger *log.Logger
 	cb     activator.Callbacks
@@ -44,7 +44,7 @@ type HTTPProxy struct {
 	healthyCond *sync.Cond  // Condition variable to wait for host health.
 }
 
-func New(cfg Config, name string, logger *log.Logger) *HTTPProxy {
+func New(cfg *Config, name string, logger *log.Logger) *HTTPProxy {
 	return &HTTPProxy{
 		cfg:    cfg,
 		name:   name,

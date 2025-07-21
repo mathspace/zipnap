@@ -16,14 +16,14 @@ import (
 
 // EC2Host implements the host.Host interface for managing an AWS EC2 instance.
 type EC2Host struct {
-	cfg    Config
+	cfg    *Config
 	logger *log.Logger
 	client *ec2.Client
 }
 
 // New creates a new EC2Host instance using the provided context, configuration,
 // and logger.
-func New(ctx context.Context, cfg Config, logger *log.Logger) (*EC2Host, error) {
+func New(ctx context.Context, cfg *Config, logger *log.Logger) (*EC2Host, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err

@@ -13,73 +13,61 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/robfig/cron/v3"
-
 	"github.com/mathspace/zipnap/activator"
 	"github.com/mathspace/zipnap/activator/httpproxy"
+	"github.com/mathspace/zipnap/activator/schedule"
 	"github.com/mathspace/zipnap/config"
 	"github.com/mathspace/zipnap/host"
 	"github.com/mathspace/zipnap/host/ec2host"
 )
 
-type instanceProxy struct {
-	a                activator.Activator
-	ready            atomic.Bool
-	activeConns      atomic.Int32
-	lastActivityTime atomic.Value // time.Time
-	logger           *log.Logger
-}
-
-type instance struct {
+type instanceRuntime struct {
 	id            string
 	cfg           config.Instance
-	proxies       map[string]*instanceProxy
-	schedules     map[string]*cron.Cron
+	activators    map[string]activator.Activator
 	host          host.Host    // Host interface for managing the EC2 instance
 	lastHostState atomic.Value // host.State
 	wakupCh       chan struct{}
 	hostReadyCond *sync.Cond // Condition variable to signal when the host is ready
 	logger        *log.Logger
+	wakeLocks     atomic.Uint32
 }
 
-func newInstance(ctx context.Context, id string, cfg config.Instance) (*instance, error) {
+func newInstance(ctx context.Context, id string, cfg config.Instance) (*instanceRuntime, error) {
 
-	proxies := make(map[string]*instanceProxy, len(cfg.Activators))
-	for svcID, svc := range cfg.Activators {
-		logger := log.New(os.Stdout, fmt.Sprintf("instance[%s] proxy[%s]: ", svcID), 0)
+	activators := make(map[string]activator.Activator, len(cfg.Activators))
+
+	for actID, act := range cfg.Activators {
+		logger := log.New(os.Stdout, fmt.Sprintf("instance[%s] activator[%s]: ", actID), 0)
 		var a activator.Activator
-		switch svc.Type {
-		case config.ServiceTypeHTTP:
-			a = httpproxy.New(svc, logger)
-		case config.ServiceTypeTCP:
-			return nil, fmt.Errorf("tcp proxy not implemented yet")
-		default:
-			panic("unreachable")
+		if act.HTTPProxy != nil {
+			a = httpproxy.New(act.HTTPProxy, actID, logger)
+		} else if act.TCPProxy != nil {
+			panic("TCPProxy not implemented yet")
+		} else if act.Schedule != nil {
+			a = schedule.New(act.Schedule, logger)
+		} else {
+			panic("unreachable: activator type not set")
 		}
-		proxies[svcID] = &instanceProxy{
-			a:      a,
-			logger: logger,
-		}
+		activators[actID] = a
 	}
 
 	logger := log.New(os.Stdout, fmt.Sprintf("instance[%s]: ", id), 0)
 	var h host.Host
 	var err error
-	switch cfg.Type {
-	case config.InstanceTypeEC2:
-		h, err = ec2host.New(ctx, cfg, logger)
+	if cfg.EC2 != nil {
+		h, err = ec2host.New(ctx, cfg.EC2, logger)
 		if err != nil {
 			return nil, err
 		}
-	default:
-		panic("unreachable")
+	} else {
+		panic("unreachable: invalid host type")
 	}
 
-	inst := &instance{
+	inst := &instanceRuntime{
 		id:            id,
 		cfg:           cfg,
-		proxies:       proxies,
-		schedules:     nil,
+		activators:    activators,
 		wakupCh:       make(chan struct{}, 1),
 		host:          h,
 		hostReadyCond: sync.NewCond(&sync.Mutex{}),
@@ -88,60 +76,49 @@ func newInstance(ctx context.Context, id string, cfg config.Instance) (*instance
 	return inst, nil
 }
 
-func (i *instance) runProxies(ctx context.Context) error {
+func (i *instanceRuntime) hostStateCallback() host.State {
+	return i.lastHostState.Load().(host.State)
+}
+
+func (i *instanceRuntime) wakeLockCallback(ctx context.Context, wake bool) (unlock func(), err error) {
+	i.hostReadyCond.L.Lock()
+	defer i.hostReadyCond.L.Unlock()
+	context.AfterFunc(ctx, func() {
+		i.hostReadyCond.L.Lock()
+		defer i.hostReadyCond.L.Unlock()
+		i.hostReadyCond.Broadcast()
+	})
+
+	for i.lastHostState.Load().(host.State).Status != host.StatusStarted {
+		if wake {
+			select {
+			case i.wakupCh <- struct{}{}:
+			default:
+				// If the channel is already full, we don't need to wake up again.
+			}
+		}
+		i.hostReadyCond.Wait()
+	}
+	
+	return
+}
+
+func (i *instanceRuntime) runActivators(ctx context.Context) error {
 	innerCtx, cancel := context.WithCancelCause(ctx)
 
-	for _, p := range i.proxies {
-		cb := proxy.Callbacks{
-			ConnDelta: func(delta int) {
-				// The order of operations is important here.
-				p.lastActivityTime.Store(time.Now())
-				p.activeConns.Add(int32(delta))
-			},
-			WaitHostReady: func(ctx context.Context, wait bool) (ready bool, hostName string) {
-
-				// If we are ready or asked not to wait, return immediately.
-				st := i.lastHostState.Load().(host.State)
-				if p.ready.Load() || !wait {
-					return ready, st.Addr
-				}
-
-				// This ensures if the context is cancelled, we stop waiting
-				// and return an error.
-				stop := context.AfterFunc(ctx, func() {
-					i.hostReadyCond.L.Lock()
-					defer i.hostReadyCond.L.Unlock()
-					i.hostReadyCond.Broadcast()
-				})
-				defer stop()
-
-				i.hostReadyCond.L.Lock()
-				defer i.hostReadyCond.L.Unlock()
-
-				for {
-					select {
-					case i.wakupCh <- struct{}{}:
-					}
-					i.hostReadyCond.Wait()
-					if ctx.Err() != nil {
-						return false, ""
-					}
-					st := i.lastHostState.Load().(host.State)
-					if p.ready.Load() {
-						return true, st.Addr
-					}
-				}
-
-			},
-		}
-		go cancel(p.a.Run(innerCtx, cb))
+	for _, a := range i.activators {
+		a.RegisterCallbacks(activator.Callbacks{
+			HostState: i.hostStateCallback,
+			WakeLock:  i.wakeLockCallback,
+		})
+		go cancel(a.Run(innerCtx))
 	}
 
 	<-innerCtx.Done()
 	return context.Cause(innerCtx)
 }
 
-func (i *instance) runReconLoop(ctx context.Context) {
+func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 
 	logger := log.New(i.logger.Writer(), fmt.Sprintf("instance[%s] recon: ", i.id), 0)
 
@@ -177,7 +154,7 @@ func (i *instance) runReconLoop(ctx context.Context) {
 		// Decision
 
 		idle := true
-		for _, p := range i.proxies {
+		for _, p := range i.activators {
 			if p.activeConns.Load() > 0 {
 				idle = false
 				break
@@ -230,7 +207,7 @@ func run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	instances := make(map[string]*instance, len(cfg.Instances))
+	instances := make(map[string]*instanceRuntime, len(cfg.Instances))
 	for i, instCfg := range cfg.Instances {
 		var err error
 		instances[i], err = newInstance(instCfg)

@@ -10,12 +10,12 @@ import (
 )
 
 type Schedule struct {
-	cfg    Config
+	cfg    *Config
 	cb     activator.Callbacks
 	logger *log.Logger
 }
 
-func New(cfg Config, l *log.Logger) *Schedule {
+func New(cfg *Config, l *log.Logger) *Schedule {
 	return &Schedule{cfg: cfg, logger: l}
 }
 
