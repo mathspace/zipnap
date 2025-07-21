@@ -94,11 +94,11 @@ func (i *Instance) Validate() error {
 
 // Config represents the configuration for the application.
 type Config struct {
-	Instances map[string]Instance `yaml:"instances"`
+	Instances map[string]*Instance `yaml:"instances"`
 }
 
 func (c *Config) UnmarshalYAML(n *yaml.Node) error {
-	inst := make(map[string]Instance)
+	inst := make(map[string]*Instance)
 	if err := n.Decode(&inst); err != nil {
 		return err
 	}

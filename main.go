@@ -23,17 +23,17 @@ import (
 
 type instanceRuntime struct {
 	id            string
-	cfg           config.Instance
+	cfg           *config.Instance
 	activators    map[string]activator.Activator
 	host          host.Host    // Host interface for managing the EC2 instance
 	lastHostState atomic.Value // host.State
 	wakupCh       chan struct{}
 	hostReadyCond *sync.Cond // Condition variable to signal when the host is ready
 	logger        *log.Logger
-	wakeLocks     atomic.Uint32
+	wakeLocks     atomic.Int32
 }
 
-func newInstance(ctx context.Context, id string, cfg config.Instance) (*instanceRuntime, error) {
+func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*instanceRuntime, error) {
 
 	activators := make(map[string]activator.Activator, len(cfg.Activators))
 
@@ -98,9 +98,13 @@ func (i *instanceRuntime) wakeLockCallback(ctx context.Context, wake bool) (unlo
 			}
 		}
 		i.hostReadyCond.Wait()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 	}
-	
-	return
+
+	i.wakeLocks.Add(1)
+	return func() { i.wakeLocks.Add(-1) }, nil
 }
 
 func (i *instanceRuntime) runActivators(ctx context.Context) error {
@@ -207,19 +211,38 @@ func run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	instances := make(map[string]*instanceRuntime, len(cfg.Instances))
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+
+	instanceRuntimes := make(map[string]*instanceRuntime, len(cfg.Instances))
 	for i, instCfg := range cfg.Instances {
 		var err error
-		instances[i], err = newInstance(instCfg)
+		instanceRuntimes[i], err = newInstanceRuntime(ctx, i, instCfg)
 		if err != nil {
-			return fmt.Errorf("instance %s: %w", i, err)
+			return fmt.Errorf("instance[%s]: %w", i, err)
 		}
-
 	}
-	wg := sync.WaitGroup{}
-	wg.Add(len(instances))
 
-	return err
+	wg := sync.WaitGroup{}
+	for _, inst := range instanceRuntimes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			inst.logger.Print("starting activators")
+			cancel(inst.runActivators(ctx))
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			inst.logger.Print("starting recon loop")
+			inst.runReconLoop(ctx)
+		}()
+	}
+
+	// TODO add signal handling to cancel the context on SIGINT/SIGTERM
+
+	wg.Wait()
+	return context.Cause(ctx)
 }
 
 func main() {
@@ -227,6 +250,10 @@ func main() {
 	configPath := flag.String("config", "zipnap.yaml", "Path to the configuration file")
 	flag.Parse()
 	if err := run(*configPath); err != nil {
-		log.Fatal(err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			log.Println("terminated")
+		} else {
+			log.Fatal(err)
+		}
 	}
 }
