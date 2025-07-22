@@ -119,6 +119,8 @@ func (i *instanceRuntime) wakeLockCallback(ctx context.Context, wake bool) (unlo
 	return func() { i.lockDeltaCh <- -1 }, nil
 }
 
+// runActivators starts all activators for the instance and waits for them to
+// finish.
 func (i *instanceRuntime) runActivators(ctx context.Context) error {
 	innerCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -229,6 +231,8 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 	}
 }
 
+// run initializes the instance runtimes and starts the activators and
+// reconciliation loops for each instance.
 func run(configPath string) error {
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
@@ -247,6 +251,7 @@ func run(configPath string) error {
 		}
 	}
 
+	// Run activators and recon loops for each instance.
 	wg := sync.WaitGroup{}
 	for _, inst := range instanceRuntimes {
 		wg.Add(1)
@@ -263,6 +268,7 @@ func run(configPath string) error {
 		}()
 	}
 
+	// Handle OS signals for graceful shutdown.
 	termCh := make(chan os.Signal, 1)
 	signal.Notify(termCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
