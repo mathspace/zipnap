@@ -10,12 +10,12 @@ type Config struct {
 }
 
 // Validate checks the TCP configuration for validity.
-func (t *Config) Validate() error {
-	if t.HostPort <= 0 || t.HostPort > 65535 {
-		return fmt.Errorf("invalid host port %d, must be between 1 and 65535", t.HostPort)
+func (c *Config) Validate() error {
+	if c.HostPort <= 0 || c.HostPort > 65535 {
+		return fmt.Errorf("invalid host port %d, must be between 1 and 65535", c.HostPort)
 	}
-	if t.ProxyPort <= 0 || t.ProxyPort > 65535 {
-		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", t.ProxyPort)
+	if c.ProxyPort <= 0 || c.ProxyPort > 65535 {
+		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", c.ProxyPort)
 	}
 	return nil
 }

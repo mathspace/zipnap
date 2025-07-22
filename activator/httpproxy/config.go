@@ -2,8 +2,10 @@ package httpproxy
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/mathspace/zipnap/config/duration"
+	"gopkg.in/yaml.v3"
 )
 
 // StoreForwardRule represents a rule for storing and forwarding HTTP requests
@@ -33,26 +35,49 @@ type Config struct {
 	HealthCheck          *HTTPHealthCheck   `yaml:"health_check,omitempty"`
 }
 
+func (c *Config) UnmarshalYAML(n *yaml.Node) error {
+	type alias Config
+	var cfg alias
+	if err := n.Decode(&cfg); err != nil {
+		return err
+	}
+	if cfg.HealthCheck == nil {
+		cfg.HealthCheck = &HTTPHealthCheck{}
+	}
+	if cfg.HealthCheck.Interval.Duration == 0 {
+		cfg.HealthCheck.Interval.Duration = 3 * time.Second // Default health check interval
+	}
+	if len(cfg.HealthCheck.StatusCodes) == 0 {
+		cfg.HealthCheck.StatusCodes = []int{200} // Default status codes for health check
+	}
+	if cfg.HealthCheck.Path == "" {
+		cfg.HealthCheck.Path = "/" // Default health check path
+	}
+	*c = Config(cfg)
+	return nil
+}
+
 // Validate checks the HTTP configuration for validity.
-func (h *Config) Validate() error {
-	if h.HostPort <= 0 || h.HostPort > 65535 {
-		return fmt.Errorf("invalid host port %d, must be between 1 and 65535", h.HostPort)
+func (c *Config) Validate() error {
+	if c.HostPort <= 0 || c.HostPort > 65535 {
+		return fmt.Errorf("invalid host port %d, must be between 1 and 65535", c.HostPort)
 	}
-	if h.ProxyPort <= 0 || h.ProxyPort > 65535 {
-		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", h.ProxyPort)
+	if c.ProxyPort <= 0 || c.ProxyPort > 65535 {
+		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", c.ProxyPort)
 	}
-	if h.HealthCheck != nil {
-		if h.HealthCheck.Path == "" {
-			return fmt.Errorf("health check path must not be empty")
-		}
-		if len(h.HealthCheck.StatusCodes) == 0 {
-			return fmt.Errorf("health check must have at least one status code")
-		}
-		if h.HealthCheck.Interval.Duration <= 0 {
-			return fmt.Errorf("health check interval must be a positive duration")
-		}
+	if c.HealthCheck == nil {
+		return fmt.Errorf("health check configuration must not be nil")
 	}
-	for _, rule := range h.StoreForwardRules {
+	if c.HealthCheck.Path == "" {
+		return fmt.Errorf("health check path must not be empty")
+	}
+	if len(c.HealthCheck.StatusCodes) == 0 {
+		return fmt.Errorf("health check must have at least one status code")
+	}
+	if c.HealthCheck.Interval.Duration <= 0 {
+		return fmt.Errorf("health check interval must be a positive duration")
+	}
+	for _, rule := range c.StoreForwardRules {
 		if rule.Method == "" {
 			return fmt.Errorf("store forward rule method must not be empty")
 		}
@@ -60,7 +85,7 @@ func (h *Config) Validate() error {
 			return fmt.Errorf("store forward rule path must not be empty")
 		}
 	}
-	if h.ShowWaitingPageAfter.Duration < 0 {
+	if c.ShowWaitingPageAfter.Duration < 0 {
 		return fmt.Errorf("show waiting page after must be a non-negative duration")
 	}
 	return nil

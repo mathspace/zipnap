@@ -158,14 +158,11 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		if err := func() error {
 
-			logger.Printf("waking up")
-
 			hostSt, err := i.host.State(ctx)
 			if err != nil {
 				return err
 			}
 
-			logger.Printf("host state: %s", hostSt.Status)
 			idle := idle.Load()
 
 			if wakeupRequested && hostSt.Status == host.StatusStopped {
