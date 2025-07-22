@@ -21,11 +21,6 @@ import (
 	"github.com/mathspace/zipnap/activator"
 )
 
-const (
-	// Duration to hold the host awake after the last wake trigger.
-	wakeAndHoldTimeout = 10 * time.Second
-)
-
 var (
 	//go:embed waiting.html
 	waitingPageBytes []byte
@@ -134,8 +129,7 @@ func (p *HTTPProxy) serveWaitingPage(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	waitingPageTpl.Execute(w, map[string]any{
-		"Name":                   p.name,
-		"RefreshIntervalSeconds": (wakeAndHoldTimeout - time.Second).Seconds(),
+		"Name": p.name,
 	})
 }
 
