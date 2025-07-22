@@ -75,6 +75,7 @@ func (h *EC2Host) State(ctx context.Context) (host.State, error) {
 
 	switch inst.State.Name {
 	case ec2types.InstanceStateNameRunning:
+		st.Status = host.StatusStarted
 		if inst.PrivateIpAddress != nil {
 			st.Addr = *inst.PrivateIpAddress
 		}
