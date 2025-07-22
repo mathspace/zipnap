@@ -8,8 +8,8 @@ import (
 )
 
 type Callbacks struct {
-	// HealthyLock blocks until it's acquired a healthy lock or the context is
-	// done (no other errors are returned). A healthy lock waits for the
+	// WakeLock blocks until it's acquired a wake lock or the context is
+	// done (no other errors are returned). A wake lock waits for the
 	// instance to wake up and pass health check, and then forces the instance
 	// to stay awake until the lock is released. If the instance is not awake,
 	// it is awoken if wake is true. It is not guaranteed that instance will be
@@ -18,7 +18,7 @@ type Callbacks struct {
 	// immediately after the lock is unlocked. If instance is awake and healthy
 	// at the time of the call, it will return immediately without blocking or
 	// returning an error even if the context is done.
-	HealthyLock func(ctx context.Context, wake bool) (unlock func(), err error)
+	WakeLock func(ctx context.Context, wake bool) (unlock func(), err error)
 
 	// State returns the current state of the instance.
 	State func() instance.State

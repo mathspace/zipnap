@@ -135,7 +135,7 @@ func (p *HTTPProxy) serveWaitingPage(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusServiceUnavailable)
 	waitingPageTpl.Execute(w, map[string]any{
 		"Name":                   p.name,
-		"RefreshIntervalSeconds": wakeAndHoldTimeout - time.Second,
+		"RefreshIntervalSeconds": (wakeAndHoldTimeout - time.Second).Seconds(),
 	})
 }
 
@@ -149,12 +149,15 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	showWaitingPage := errors.New("")
 	waitCtx, cancel := context.WithTimeoutCause(ctx, p.cfg.ShowWaitingPageAfter.Duration, showWaitingPage)
 	unlock, err := func() (func(), error) {
-		unlock, err := p.cb.HealthyLock(waitCtx, true)
+		unlock, err := p.cb.WakeLock(waitCtx, true)
 		if err != nil {
 			return nil, err
 		}
 		return unlock, p.waitHealthy(waitCtx)
 	}()
+	if unlock != nil {
+		defer unlock()
+	}
 	cancel()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -165,9 +168,9 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// are creating a new wake lock and a new goroutine for each
 				// request, which is not efficient.
 				go func() {
-					ctx, cancel := context.WithTimeout(ctx, wakeAndHoldTimeout)
+					ctx, cancel := context.WithTimeout(context.Background(), wakeAndHoldTimeout)
 					defer cancel()
-					unlock, err := p.cb.HealthyLock(ctx, true)
+					unlock, err := p.cb.WakeLock(ctx, true)
 					if err != nil {
 						return
 					}
@@ -182,7 +185,6 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to wake host", http.StatusInternalServerError)
 		return
 	}
-	defer unlock()
 
 	// Proxy the request.
 

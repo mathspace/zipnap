@@ -56,29 +56,27 @@ func (h *EC2Host) Stop(ctx context.Context) error {
 // State retrieves the current state of the EC2 instance specified in the
 // configuration.
 func (h *EC2Host) State(ctx context.Context) (host.State, error) {
-	st := host.State{}
+	st := host.State{Status: host.StatusUnknown}
 
-	// Get instance status first.
-
-	statusResp, err := h.client.DescribeInstanceStatus(ctx, &ec2.DescribeInstanceStatusInput{
-		InstanceIds:         []string{h.cfg.InstanceID},
-		IncludeAllInstances: aws.Bool(true),
+	resp, err := h.client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{h.cfg.InstanceID},
 	})
 	if err != nil {
 		return st, err
 	}
-	if len(statusResp.InstanceStatuses) != 1 {
-		return st, fmt.Errorf("expected exactly one instance status, got %d", len(statusResp.InstanceStatuses))
+	if len(resp.Reservations) == 0 || len(resp.Reservations[0].Instances) == 0 {
+		return st, fmt.Errorf("no instances found for ID %s", h.cfg.InstanceID)
 	}
-	s := statusResp.InstanceStatuses[0]
+	inst := resp.Reservations[0].Instances[0]
 
-	switch s.InstanceState.Name {
+	if inst.State == nil {
+		return st, nil
+	}
+
+	switch inst.State.Name {
 	case ec2types.InstanceStateNameRunning:
-		if s.SystemStatus != nil && s.SystemStatus.Status == ec2types.SummaryStatusOk &&
-			s.InstanceStatus != nil && s.InstanceStatus.Status == ec2types.SummaryStatusOk {
-			st.Status = host.StatusStarted
-		} else {
-			st.Status = host.StatusStarting
+		if inst.PrivateIpAddress != nil {
+			st.Addr = *inst.PrivateIpAddress
 		}
 	case ec2types.InstanceStateNamePending:
 		st.Status = host.StatusStarting
@@ -86,26 +84,6 @@ func (h *EC2Host) State(ctx context.Context) (host.State, error) {
 		st.Status = host.StatusStopping
 	case ec2types.InstanceStateNameStopped:
 		st.Status = host.StatusStopped
-	default:
-		st.Status = host.StatusUnknown
-	}
-
-	// Get the hostname if instance has started.
-
-	if st.Status == host.StatusStarted {
-		resp, err := h.client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-			InstanceIds: []string{h.cfg.InstanceID},
-		})
-		if err != nil {
-			return st, err
-		}
-		if len(resp.Reservations) == 0 || len(resp.Reservations[0].Instances) == 0 {
-			return st, fmt.Errorf("no instances found for ID %s", h.cfg.InstanceID)
-		}
-		inst := resp.Reservations[0].Instances[0]
-		if inst.PrivateIpAddress != nil {
-			st.Addr = *inst.PrivateIpAddress
-		}
 	}
 
 	return st, nil

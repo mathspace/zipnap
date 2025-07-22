@@ -73,10 +73,11 @@ func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*
 		host:          h,
 		hostReadyCond: sync.NewCond(&sync.Mutex{}),
 		logger:        logger,
+		lockDeltaCh:   make(chan int, 1), // Buffered channel to avoid blocking on lock delta updates
 	}
 	inst.callbacks = activator.Callbacks{
-		State:       inst.hostStateCallback,
-		HealthyLock: inst.wakeLockCallback,
+		State:    inst.hostStateCallback,
+		WakeLock: inst.wakeLockCallback,
 	}
 	inst.state.Store(instance.UnhealthyState)
 	return inst, nil
@@ -133,37 +134,52 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 
 	logger := log.New(i.logger.Writer(), fmt.Sprintf("instance[%s] recon: ", i.id), 0)
 
-	var idle atomic.Bool
+	var idleLocks atomic.Bool
 
 	// idle determination loop.
 	go func() {
-		var lastUnlock time.Time
 		wakeLocks := 0
+		idleTimer := time.NewTimer(i.cfg.Timeout.Duration)
 		for {
 			select {
+			case <-idleTimer.C:
+				logger.Printf("no wake locks for %s, going idle", i.cfg.Timeout.Duration)
+				idleLocks.Store(true)
 			case delta := <-i.lockDeltaCh:
-				if delta < 0 {
-					lastUnlock = time.Now()
-				}
 				wakeLocks += delta
-				idle.Store(wakeLocks == 0 && time.Since(lastUnlock) <= i.cfg.Timeout.Duration)
+				if wakeLocks > 0 {
+					idleTimer.Stop()
+					idleLocks.Store(false)
+				} else {
+					idleTimer.Reset(i.cfg.Timeout.Duration)
+				}
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
+	lastStartedAt := time.Time{}
 	var wakeupRequested bool
+	hostSt := host.State{Status: host.StatusUnknown}
+	lastHostSt := host.State{Status: host.StatusUnknown}
+
 	for ctx.Err() == nil {
+		lastHostSt = hostSt
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		if err := func() error {
-
-			hostSt, err := i.host.State(ctx)
+			var err error
+			hostSt, err = i.host.State(ctx)
 			if err != nil {
 				return err
 			}
 
-			idle := idle.Load()
+			// Record last started at time.
+			if hostSt.Status == host.StatusStarted && lastHostSt.Status != host.StatusStarted {
+				lastStartedAt = time.Now()
+			}
+
+			idle := idleLocks.Load() && time.Since(lastStartedAt) >= i.cfg.Timeout.Duration
 
 			if wakeupRequested && hostSt.Status == host.StatusStopped {
 				i.state.Store(instance.UnhealthyState)
@@ -179,6 +195,7 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 					})
 				}
 				if wakeupRequested {
+					logger.Printf("notifying activators that host is ready")
 					i.hostReadyCond.Broadcast()
 					wakeupRequested = false
 				} else if idle {
