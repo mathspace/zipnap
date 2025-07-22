@@ -209,19 +209,11 @@
     </div>
 
     <script>
-      // Auto-refresh functionality
-      const refreshAt = new Date(Date.now() + {{.RefreshIntervalSeconds}} * 1000);
-
-      function updateCountdown() {
-        if (new Date() >= refreshAt) {
-          location.reload();
-        } else {
-          setTimeout(updateCountdown, 100);
-        }
-      }
-
-      // Start countdown
-      updateCountdown();
+      // Auto-refresh functionality via SSE
+      const e = new EventSource("/_zipnap/waitready");
+      e.addEventListener("ready", () => {
+        window.location.reload();
+      });
 
       // Add some interactive effects
       document.addEventListener("mousemove", (e) => {

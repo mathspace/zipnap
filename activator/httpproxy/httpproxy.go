@@ -162,21 +162,8 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			if context.Cause(waitCtx) == showWaitingPage {
-				// FIXME: this is a low resource concious way of persisting
-				// attempt to wake the host while the next request from the
-				// waiting page comes through. This is a poor method because we
-				// are creating a new wake lock and a new goroutine for each
-				// request, which is not efficient.
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), wakeAndHoldTimeout)
-					defer cancel()
-					unlock, err := p.cb.WakeLock(ctx, true)
-					if err != nil {
-						return
-					}
-					defer unlock()
-					<-ctx.Done()
-				}()
+				// Waiting page will open a SSE connection to wait for
+				// host to become healthy.
 				p.serveWaitingPage(w)
 			}
 			return
@@ -195,14 +182,39 @@ func (p *HTTPProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 }
 
+// waitReadySSEHandler handles the /_zipnap/waitready endpoint for server-sent
+// events (SSE) to notify clients when the host is ready. It sends a
+// "ready" event when the host becomes healthy.
+func (p *HTTPProxy) waitReadySSEHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ctx := r.Context()
+	unlock, err := p.cb.WakeLock(ctx, true)
+	if err != nil {
+		return
+	}
+	defer unlock()
+	if err := p.waitHealthy(ctx); err != nil {
+		return
+	}
+
+	fmt.Fprintf(w, "event: ready\ndata: Host is ready\n\n")
+}
+
 // Run starts the HTTP proxy server and listens for incoming requests. It also
 // starts a health checker that periodically checks the health of the host. The
 // server will run until the context is done or an error occurs.
 func (p *HTTPProxy) Run(ctx context.Context) error {
 
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /_zipnap/waitready", p.waitReadySSEHandler)
+	mux.HandleFunc("/", p.handleHTTP)
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", p.cfg.ProxyHost, p.cfg.ProxyPort),
-		Handler: http.HandlerFunc(p.handleHTTP),
+		Handler: mux,
 	}
 
 	ctx, cancel := context.WithCancelCause(ctx)
