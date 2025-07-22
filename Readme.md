@@ -48,7 +48,6 @@ instances:
     timeout: 5m  # Stop instance after 5 minutes of inactivity
     ec2:
       instance_id: "i-1234567890abcdef0"
-      region: "us-west-2"
     activators:
       web:
         httpproxy:
