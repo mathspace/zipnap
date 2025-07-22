@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/mathspace/zipnap/activator"
@@ -261,7 +263,12 @@ func run(configPath string) error {
 		}()
 	}
 
-	// TODO add signal handling to cancel the context on SIGINT/SIGTERM
+	termCh := make(chan os.Signal, 1)
+	signal.Notify(termCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-termCh
+		cancel(nil)
+	}()
 
 	wg.Wait()
 	return context.Cause(ctx)
