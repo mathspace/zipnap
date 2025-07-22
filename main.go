@@ -195,7 +195,7 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 					})
 				}
 				if wakeupRequested {
-					logger.Printf("notifying activators that host is ready")
+					logger.Printf("notifying activators that host is up")
 					i.hostReadyCond.Broadcast()
 					wakeupRequested = false
 				} else if idle {
