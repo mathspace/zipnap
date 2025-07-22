@@ -184,7 +184,7 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 
 			if wakeupRequested && hostSt.Status == host.StatusStopped {
 				i.state.Store(instance.UnhealthyState)
-				log.Print("waking up host")
+				logger.Print("waking up host")
 				if err := i.host.Start(ctx); err != nil {
 					return err
 				}
@@ -201,7 +201,7 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 					wakeupRequested = false
 				} else if idle {
 					i.state.Store(instance.UnhealthyState)
-					log.Print("stopping due to inactivity")
+					logger.Print("stopping due to inactivity")
 					if err := i.host.Stop(ctx); err != nil {
 						return err
 					}
