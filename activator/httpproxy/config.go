@@ -41,6 +41,9 @@ func (c *Config) UnmarshalYAML(n *yaml.Node) error {
 	if err := n.Decode(&cfg); err != nil {
 		return err
 	}
+	if cfg.ShowWaitingPageAfter.Duration < 0 {
+		return fmt.Errorf("show waiting page after must be a non-negative duration, got %s", cfg.ShowWaitingPageAfter.Duration)
+	}
 	if cfg.HealthCheck == nil {
 		cfg.HealthCheck = &HTTPHealthCheck{}
 	}

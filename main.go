@@ -136,7 +136,7 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 
 	var idleLocks atomic.Bool
 
-	// idle determination loop.
+	// No lock idle determination loop.
 	go func() {
 		wakeLocks := 0
 		idleTimer := time.NewTimer(i.cfg.Timeout.Duration)
@@ -164,6 +164,7 @@ func (i *instanceRuntime) runReconLoop(ctx context.Context) {
 	hostSt := host.State{Status: host.StatusUnknown}
 	lastHostSt := host.State{Status: host.StatusUnknown}
 
+	// Main reconciliation loop.
 	for ctx.Err() == nil {
 		lastHostSt = hostSt
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)

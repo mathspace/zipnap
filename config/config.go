@@ -76,7 +76,7 @@ func (i *Instance) UnmarshalYAML(n *yaml.Node) error {
 
 func (i *Instance) Validate() error {
 	if i.Timeout.Duration <= 0 {
-		return fmt.Errorf("timeout must be a positive duration")
+		return fmt.Errorf("timeout is required and must be a positive duration")
 	}
 
 	typeCount := 0
