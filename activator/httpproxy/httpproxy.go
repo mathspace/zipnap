@@ -79,10 +79,23 @@ func (p *HTTPProxy) pingHealth(ctx context.Context, hostName string) (healthy bo
 	return slices.Contains(p.cfg.HealthCheck.StatusCodes, resp.StatusCode), nil
 }
 
+func (p *HTTPProxy) isHealthy() bool {
+	if p.cfg.HealthCheck == nil {
+		// No health check configured, assume healthy if host is up.
+		return p.cb.State().Healthy
+	}
+	// If health check is configured, check the atomic healthy flag.
+	return p.healthy.Load()
+}
+
 // runHealthChecker starts a goroutine that periodically checks the health of
 // the host by pinging the health check endpoint. It waits for the host to wake up
 // before performing the health check.
 func (p *HTTPProxy) runHealthChecker(ctx context.Context) {
+	if p.cfg.HealthCheck == nil {
+		p.logger.Print("health check is not configured, assuming healthy if host is up")
+		return
+	}
 	for ctx.Err() == nil {
 		toCtx, cancel := context.WithTimeout(ctx, p.cfg.HealthCheck.Interval.Duration)
 		st := p.cb.State()
@@ -122,7 +135,7 @@ func (p *HTTPProxy) waitHealthy(ctx context.Context) error {
 	})
 	defer stop()
 
-	for !p.healthy.Load() {
+	for !p.isHealthy() {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

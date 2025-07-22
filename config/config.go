@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 
 	"github.com/mathspace/zipnap/activator/httpproxy"
 	"github.com/mathspace/zipnap/activator/schedule"
@@ -14,6 +15,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func isValidatorNil(v Validator) bool {
+	if v == nil {
+		return true
+	}
+	val := reflect.ValueOf(v)
+	return val.IsNil()
+}
+
 type Validator interface {
 	Validate() error
 }
@@ -22,15 +31,15 @@ type Validator interface {
 type Activator struct {
 	ID string `yaml:"-"`
 
-	HTTPProxy *httpproxy.Config `yaml:"http,omitempty"`
-	TCPProxy  *tcpproxy.Config  `yaml:"tcp,omitempty"`
+	HTTPProxy *httpproxy.Config `yaml:"http_proxy,omitempty"`
+	TCPProxy  *tcpproxy.Config  `yaml:"tcp_proxy,omitempty"`
 	Schedule  *schedule.Config  `yaml:"schedule,omitempty"`
 }
 
 func (s *Activator) Validate() error {
 	typeCount := 0
 	for _, v := range []Validator{s.HTTPProxy, s.TCPProxy, s.Schedule} {
-		if v != nil {
+		if !isValidatorNil(v) {
 			typeCount++
 			if err := v.Validate(); err != nil {
 				return fmt.Errorf("activator %q: %w", s.ID, err)
@@ -72,7 +81,7 @@ func (i *Instance) Validate() error {
 
 	typeCount := 0
 	for _, v := range []Validator{i.EC2} {
-		if v != nil {
+		if !isValidatorNil(v) {
 			typeCount++
 			if err := v.Validate(); err != nil {
 				return fmt.Errorf("instance %q: %w", i.ID, err)
@@ -98,15 +107,15 @@ type Config struct {
 }
 
 func (c *Config) UnmarshalYAML(n *yaml.Node) error {
-	inst := make(map[string]*Instance)
-	if err := n.Decode(&inst); err != nil {
+	type alias Config
+	cfg := alias{}
+	if err := n.Decode(&cfg); err != nil {
 		return err
 	}
-	for id, i := range inst {
+	for id, i := range cfg.Instances {
 		i.ID = id
-		inst[id] = i
 	}
-	c.Instances = inst
+	*c = Config(cfg)
 	return nil
 }
 

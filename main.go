@@ -72,6 +72,7 @@ func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*
 		wakeupCh:      make(chan struct{}, 1),
 		host:          h,
 		hostReadyCond: sync.NewCond(&sync.Mutex{}),
+		logger:        logger,
 	}
 	inst.callbacks = activator.Callbacks{
 		State:       inst.hostStateCallback,
