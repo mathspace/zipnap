@@ -2,7 +2,7 @@
 // Runner activator.
 //
 // This activator wakes up the host and keeps it awake while there are GihHub
-// Actions jobs with matching runner labels that are awaiting their runners.
+// Actions jobs with matching runner labels that need a runner.
 package gharunner
 
 import (
@@ -44,16 +44,16 @@ func (g *GHARunner) RegisterCallbacks(cb activator.Callbacks) {
 	g.cb = cb
 }
 
-// areJobsWaiting checks if there are any GitHub Actions jobs waiting for a
-// runner with the configured labels across all repositories.
-func (g *GHARunner) areJobsWaiting(ctx context.Context) (bool, error) {
+// doJobsNeedRepos checks if there are any GitHub Actions jobs that need runners
+// in any of the repos.
+func (g *GHARunner) doJobsNeedRepos(ctx context.Context) (bool, error) {
 	for _, repoFull := range g.cfg.Repos {
 		owner, repo, _ := splitOwnerRepo(repoFull)
-		waiting, err := g.areJobsWaitingForRepo(ctx, owner, repo)
+		need, err := g.doJobsNeedRepo(ctx, owner, repo)
 		if err != nil {
 			return false, err
 		}
-		if waiting {
+		if need {
 			return true, nil
 		}
 	}
@@ -61,9 +61,10 @@ func (g *GHARunner) areJobsWaiting(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// areJobsWaitingForRepo checks if there are any GitHub Actions jobs waiting for
-// a runner in the specified repository.
-func (g *GHARunner) areJobsWaitingForRepo(ctx context.Context, owner, repo string) (bool, error) {
+// doJobsNeedRepo checks if there are any GitHub Actions jobs that need runners
+// in the specified repository. Jobs needs runnings while they wait for them and
+// while they're running.
+func (g *GHARunner) doJobsNeedRepo(ctx context.Context, owner, repo string) (bool, error) {
 
 	// Get list of all workflows that are in progress.
 
@@ -87,10 +88,6 @@ func (g *GHARunner) areJobsWaitingForRepo(ctx context.Context, owner, repo strin
 		page += 1
 	}
 
-	// For each workflow, check if it has any jobs that are waiting for a runner
-	// (status of queued) and that runner has all the labels configured in the
-	// activator.
-
 	for _, workflowRun := range allWorkflowRuns {
 		page := 1
 		for {
@@ -108,8 +105,7 @@ func (g *GHARunner) areJobsWaitingForRepo(ctx context.Context, owner, repo strin
 			}
 			for _, job := range wfJobs.Jobs {
 				// We need to check for in_progress as well since they're
-				// technically still using a runner and thus "waiting" for it to
-				// continue to exist.
+				// technically need the runners while they're running.
 				if job.GetStatus() != "queued" && job.GetStatus() != "in_progress" {
 					continue
 				}
@@ -121,7 +117,7 @@ func (g *GHARunner) areJobsWaitingForRepo(ctx context.Context, owner, repo strin
 					}
 				}
 				if matchCount == len(g.labels) {
-					// If all labels match, we have a job waiting for a runner.
+					// If all labels match, we have a job that needs a runner.
 					return true, nil
 				}
 			}
@@ -129,8 +125,8 @@ func (g *GHARunner) areJobsWaitingForRepo(ctx context.Context, owner, repo strin
 		}
 	}
 
-	// If we reach here, no jobs were found that are waiting for a runner with
-	// the configured labels.
+	// If we reach here, no jobs were found that needs a runner with the
+	// configured labels.
 	return false, nil
 
 }
@@ -139,7 +135,7 @@ func (g *GHARunner) Run(ctx context.Context) error {
 
 	// Do one initial check to test the connection and configuration.
 
-	if _, err := g.areJobsWaiting(ctx); err != nil {
+	if _, err := g.doJobsNeedRepos(ctx); err != nil {
 		return err
 	}
 
@@ -151,12 +147,12 @@ func (g *GHARunner) Run(ctx context.Context) error {
 	}()
 
 	check := func() {
-		waiting, err := g.areJobsWaiting(ctx)
+		need, err := g.doJobsNeedRepos(ctx)
 		if err != nil {
-			g.logger.Printf("Error checking for waiting jobs: %v", err)
+			g.logger.Printf("Error checking for jobs: %v", err)
 			return
 		}
-		if !waiting {
+		if !need {
 			if unlock != nil {
 				unlock()
 				unlock = nil
