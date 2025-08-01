@@ -1,6 +1,6 @@
-# Zipnap
+# ZipNap
 
-Zipnap is a smart cloud resource management tool that automatically starts and
+ZipNap is a smart cloud resource management tool that automatically starts and
 stops various types of instances based on demand. It acts as a proxy that wakes
 up sleeping instances when they're needed and puts them back to sleep when idle,
 helping you save on cloud costs while maintaining availability.
@@ -19,7 +19,7 @@ helping you save on cloud costs while maintaining availability.
 ## How It Works
 
 1. **Request Arrives**: A request comes in through one of the configured activators (HTTP proxy, schedule, etc.)
-2. **Wake Up**: If the target instance is stopped, Zipnap starts it automatically
+2. **Wake Up**: If the target instance is stopped, ZipNap starts it automatically
 3. **Health Check**: Monitors the instance until it's healthy and ready to serve traffic
 4. **Proxy Traffic**: Routes requests to the healthy instance
 5. **Idle Detection**: Tracks activity and stops the instance after a configured timeout period
@@ -68,7 +68,7 @@ instances:
 
 ## Usage
 
-Run Zipnap with your configuration:
+Run ZipNap with your configuration:
 
 ```bash
 zipnap -config zipnap.yaml
