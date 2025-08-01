@@ -8,17 +8,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// StoreForwardRule represents a rule for storing and forwarding HTTP requests
-// while the host is down.
-type StoreForwardRule struct {
-	// Method is the HTTP method (GET, POST, etc.) that this rule applies to.
-	// Leave empty to match all methods.
-	Method string `yaml:"http_method"`
-	// Path is the path that this rule applies to. It can be a full path or a
-	// prefix. If it is a prefix, it should end with a slash (e.g., "/api/").
-	Path string `yaml:"path"`
-}
-
 type HTTPHealthCheck struct {
 	Interval    duration.Duration `yaml:"interval"`
 	Path        string            `yaml:"path"`
@@ -27,12 +16,11 @@ type HTTPHealthCheck struct {
 
 // Config represents the configuration for an HTTPProxy proxy activator.
 type Config struct {
-	HostPort             int                `yaml:"host_port"`
-	ListenPort           int                `yaml:"listen_port"`
-	ListenAddr           string             `yaml:"listen_addr,omitempty"`
-	StoreForwardRules    []StoreForwardRule `yaml:"store_forward_rules,omitempty"`
-	ShowWaitingPageAfter duration.Duration  `yaml:"show_waiting_page_after,omitempty"`
-	HealthCheck          *HTTPHealthCheck   `yaml:"health_check,omitempty"`
+	HostPort             int               `yaml:"host_port"`
+	ListenPort           int               `yaml:"listen_port"`
+	ListenAddr           string            `yaml:"listen_addr,omitempty"`
+	ShowWaitingPageAfter duration.Duration `yaml:"show_waiting_page_after,omitempty"`
+	HealthCheck          *HTTPHealthCheck  `yaml:"health_check,omitempty"`
 }
 
 func (c *Config) UnmarshalYAML(n *yaml.Node) error {
@@ -79,14 +67,6 @@ func (c *Config) Validate() error {
 	}
 	if c.HealthCheck.Interval.Duration <= 0 {
 		return fmt.Errorf("health check interval must be a positive duration")
-	}
-	for _, rule := range c.StoreForwardRules {
-		if rule.Method == "" {
-			return fmt.Errorf("store forward rule method must not be empty")
-		}
-		if rule.Path == "" {
-			return fmt.Errorf("store forward rule path must not be empty")
-		}
 	}
 	if c.ShowWaitingPageAfter.Duration < 0 {
 		return fmt.Errorf("show waiting page after must be a non-negative duration")
