@@ -20,6 +20,7 @@ import (
 	"github.com/mathspace/zipnap/config"
 	"github.com/mathspace/zipnap/host"
 	"github.com/mathspace/zipnap/host/ec2host"
+	"github.com/mathspace/zipnap/host/rdshost"
 	"github.com/mathspace/zipnap/instance"
 )
 
@@ -60,6 +61,11 @@ func newInstanceRuntime(ctx context.Context, id string, cfg *config.Instance) (*
 	var err error
 	if cfg.EC2 != nil {
 		h, err = ec2host.New(ctx, cfg.EC2, logger)
+		if err != nil {
+			return nil, err
+		}
+	} else if cfg.RDS != nil {
+		h, err = rdshost.New(ctx, cfg.RDS, logger)
 		if err != nil {
 			return nil, err
 		}

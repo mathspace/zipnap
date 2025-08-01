@@ -12,6 +12,7 @@ import (
 	"github.com/mathspace/zipnap/activator/tcpproxy"
 	"github.com/mathspace/zipnap/config/duration"
 	"github.com/mathspace/zipnap/host/ec2host"
+	"github.com/mathspace/zipnap/host/rdshost"
 	"gopkg.in/yaml.v3"
 )
 
@@ -56,6 +57,7 @@ func (s *Activator) Validate() error {
 type Instance struct {
 	ID         string               `yaml:"-"`
 	EC2        *ec2host.Config      `yaml:"ec2,omitempty"`
+	RDS        *rdshost.Config      `yaml:"rds,omitempty"`
 	Timeout    duration.Duration    `yaml:"timeout"`
 	Activators map[string]Activator `yaml:"activators,omitempty"`
 }
@@ -80,7 +82,7 @@ func (i *Instance) Validate() error {
 	}
 
 	typeCount := 0
-	for _, v := range []Validator{i.EC2} {
+	for _, v := range []Validator{i.EC2, i.RDS} {
 		if !isValidatorNil(v) {
 			typeCount++
 			if err := v.Validate(); err != nil {
