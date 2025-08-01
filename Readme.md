@@ -9,11 +9,12 @@ helping you save on cloud costs while maintaining availability.
 
 - **Smart Wake-Up**: Automatically starts instances when requests arrive
 - **HTTP Proxy**: Routes HTTP traffic to target instances with health checks
+- **TCP Proxy**: Routes TCP traffic to target instances
 - **Schedule-Based Activation**: Wake up instances based on cron schedules
+- **GitHub Actions Runner Activation**: Starts host on matching GitHub Actions Job with specific labels
 - **Idle Shutdown**: Automatically stops instances after periods of inactivity
 - **Health Monitoring**: Continuous health checks with configurable endpoints
 - **Waiting Pages**: Shows user-friendly waiting pages while instances start up
-- **Multiple Activators**: Support for HTTP proxy, TCP proxy, and scheduled activations
 
 ## How It Works
 
@@ -51,8 +52,8 @@ instances:
     activators:
       web:
         httpproxy:
-          proxy_host: "0.0.0.0"
-          proxy_port: 8080
+          listen_host: "0.0.0.0"
+          listen_port: 8080
           host_port: 3000
           show_waiting_page_after: 3s
           health_check:
@@ -72,23 +73,6 @@ Run Zipnap with your configuration:
 ```bash
 zipnap -config zipnap.yaml
 ```
-
-## Activator Types
-
-### HTTP Proxy
-Routes HTTP requests to your instance and shows waiting pages during startup:
-- Configurable health checks
-- Custom waiting pages
-- SSE-based ready notifications
-
-### Schedule
-Wakes up instances based on cron expressions:
-- Standard cron syntax
-- Multiple schedules per instance
-- Timezone support
-
-### TCP Proxy (Coming Soon)
-Routes TCP traffic to instances.
 
 ## Example Use Cases
 
