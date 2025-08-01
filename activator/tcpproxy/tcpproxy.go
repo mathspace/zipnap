@@ -33,7 +33,16 @@ func (p *TCPProxy) RegisterCallbacks(cb activator.Callbacks) {
 	p.cb = cb
 }
 
-func (p *TCPProxy) handleConnection(ctx context.Context, clientConn net.Conn) {
+func (p *TCPProxy) handleConnection(ctx context.Context, clientConn *net.TCPConn) {
+	// Aggressive keep-alive that lets us detect dead connections early and
+	// let the host go back to sleep.
+	clientConn.SetKeepAliveConfig(net.KeepAliveConfig{
+		Enable:   true,
+		Idle:     10 * time.Second,
+		Interval: 3 * time.Second,
+		Count:    3,
+	})
+
 	unlock, err := p.cb.WakeLock(ctx, true)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -107,7 +116,7 @@ func (p *TCPProxy) Run(ctx context.Context) error {
 				p.logger.Printf("failed to accept connection: %v", err)
 				continue
 			}
-			go p.handleConnection(ctx, conn)
+			go p.handleConnection(ctx, conn.(*net.TCPConn))
 		}
 	}()
 
