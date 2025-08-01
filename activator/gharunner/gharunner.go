@@ -107,7 +107,10 @@ func (g *GHARunner) areJobsWaitingForRepo(ctx context.Context, owner, repo strin
 				break
 			}
 			for _, job := range wfJobs.Jobs {
-				if job.GetStatus() != "queued" {
+				// We need to check for in_progress as well since they're
+				// technically still using a runner and thus "waiting" for it to
+				// continue to exist.
+				if job.GetStatus() != "queued" && job.GetStatus() != "in_progress" {
 					continue
 				}
 				matchCount := 0
