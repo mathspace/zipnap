@@ -20,6 +20,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.25.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.30.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.34.0 // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
 )
 
 require (
@@ -27,4 +28,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.230.0
 	github.com/aws/aws-sdk-go-v2/service/rds v1.100.1
 	github.com/aws/smithy-go v1.22.5 // indirect
+	github.com/google/go-github/v74 v74.0.0
+	golang.org/x/oauth2 v0.30.0
 )

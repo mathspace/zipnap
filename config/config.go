@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 
+	"github.com/mathspace/zipnap/activator/gharunner"
 	"github.com/mathspace/zipnap/activator/httpproxy"
 	"github.com/mathspace/zipnap/activator/schedule"
 	"github.com/mathspace/zipnap/activator/tcpproxy"
@@ -58,6 +59,7 @@ type Instance struct {
 	ID         string               `yaml:"-"`
 	EC2        *ec2host.Config      `yaml:"ec2,omitempty"`
 	RDS        *rdshost.Config      `yaml:"rds,omitempty"`
+	GHA        *gharunner.Config    `yaml:"gha,omitempty"`
 	Timeout    duration.Duration    `yaml:"timeout"`
 	Activators map[string]Activator `yaml:"activators,omitempty"`
 }
@@ -82,7 +84,7 @@ func (i *Instance) Validate() error {
 	}
 
 	typeCount := 0
-	for _, v := range []Validator{i.EC2, i.RDS} {
+	for _, v := range []Validator{i.EC2, i.RDS, i.GHA} {
 		if !isValidatorNil(v) {
 			typeCount++
 			if err := v.Validate(); err != nil {
