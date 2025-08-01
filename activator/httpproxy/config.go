@@ -28,8 +28,8 @@ type HTTPHealthCheck struct {
 // Config represents the configuration for an HTTPProxy proxy activator.
 type Config struct {
 	HostPort             int                `yaml:"host_port"`
-	ProxyPort            int                `yaml:"proxy_port"`
-	ProxyHost            string             `yaml:"proxy_host,omitempty"`
+	ListenPort           int                `yaml:"listen_port"`
+	ListenAddr           string             `yaml:"listen_addr,omitempty"`
 	StoreForwardRules    []StoreForwardRule `yaml:"store_forward_rules,omitempty"`
 	ShowWaitingPageAfter duration.Duration  `yaml:"show_waiting_page_after,omitempty"`
 	HealthCheck          *HTTPHealthCheck   `yaml:"health_check,omitempty"`
@@ -65,8 +65,8 @@ func (c *Config) Validate() error {
 	if c.HostPort <= 0 || c.HostPort > 65535 {
 		return fmt.Errorf("invalid host port %d, must be between 1 and 65535", c.HostPort)
 	}
-	if c.ProxyPort <= 0 || c.ProxyPort > 65535 {
-		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", c.ProxyPort)
+	if c.ListenPort <= 0 || c.ListenPort > 65535 {
+		return fmt.Errorf("invalid proxy port %d, must be between 1 and 65535", c.ListenPort)
 	}
 	if c.HealthCheck == nil {
 		return fmt.Errorf("health check configuration must not be nil")

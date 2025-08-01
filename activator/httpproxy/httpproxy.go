@@ -207,7 +207,7 @@ func (p *HTTPProxy) Run(ctx context.Context) error {
 	mux.HandleFunc("/", p.handleHTTP)
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", p.cfg.ProxyHost, p.cfg.ProxyPort),
+		Addr:    fmt.Sprintf("%s:%d", p.cfg.ListenAddr, p.cfg.ListenPort),
 		Handler: mux,
 	}
 
