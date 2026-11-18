@@ -56,4 +56,4 @@ Repository: github.com/mathspace/zipnap
 
 Baseline assessment: ce69f49359bbd9d4eaad705e01a1d23f6fd1e9d0. The eMudhra mitigation below describes this PR.
 
-Go builds require Go 1.27.3 or newer, which rejects the compromised eMudhra intermediates. Rebuild and restart deployed binaries; source version changes do not update running services.
+Go builds require Go 1.27.4 or newer, which rejects the compromised eMudhra intermediates. Rebuild and restart deployed binaries; source version changes do not update running services.
